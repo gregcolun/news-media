@@ -31,7 +31,6 @@
           <option value="3600000" selected>Refresh 60 min</option>
         </select>
         <button id="refreshBtn">Refresh now</button>
-
       </div>
     </header>
 
@@ -48,29 +47,16 @@
 
       <aside class="sidebar">
         <h3>About</h3>
-        <p class="small">Headlines from major Central European outlets, updated on a safe schedule. Click any headline to open the original article.</p>
-
-        <div id="google_translate_element" style="margin-top:20px;"></div>
+        <p class="small">
+          Headlines from major Central European outlets, translated automatically to English using Google Translate API.
+          Click any headline to open the original article.
+        </p>
       </aside>
     </div>
 
-    <footer>
-      <div class="small">Central Europe — Live News</div>
-    </footer>
+ 
   </div>
 
   <script src="script.js"></script>
-  <script>
-    function googleTranslateElementInit() {
-      new google.translate.TranslateElement({
-        pageLanguage: 'auto',
-        includedLanguages: 'en',
-        autoDisplay: false,
-        layout: google.translate.TranslateElement.InlineLayout.SIMPLE
-      }, 'google_translate_element');
-    }
-  </script>
-  
-  <script src="//translate.google.com/translate_a/element.js?cb=googleTranslateElementInit"></script>
 </body>
 </html>

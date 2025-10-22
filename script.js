@@ -40,15 +40,31 @@ document.addEventListener("DOMContentLoaded", () => {
   
     let refreshTimer = null;
   
+    async function translateText(text) {
+      if (!text) return text;
+      try {
+        const res = await fetch(
+          `https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=en&dt=t&q=${encodeURIComponent(text)}`
+        );
+        const data = await res.json();
+        return data[0][0][0];
+      } catch (e) {
+        console.warn("Translation failed:", e);
+        return text;
+      }
+    }
+  
     async function fetchFeeds(country, forceRefresh = false) {
       const cacheKey = `news_${country}`;
-      const cache = localStorage.getItem(cacheKey);
-      const cacheTime = localStorage.getItem(`${cacheKey}_time`);
+      const cacheTimeKey = `${cacheKey}_time`;
       const now = Date.now();
   
-      // Cache validity: 1 hour
+      const cache = localStorage.getItem(cacheKey);
+      const cacheTime = localStorage.getItem(cacheTimeKey);
+  
       if (cache && cacheTime && now - cacheTime < 3600000 && !forceRefresh) {
-        renderItems(JSON.parse(cache), true);
+        const data = JSON.parse(cache);
+        renderItems(data, true);
         return;
       }
   
@@ -56,35 +72,30 @@ document.addEventListener("DOMContentLoaded", () => {
   
       try {
         const urls = FEEDS[country];
-        let allItems = [];
+        const allItems = [];
   
         for (const url of urls) {
-          const proxy = `https://api.allorigins.win/get?url=${encodeURIComponent(url)}`;
-          const res = await fetch(proxy);
-          const data = await res.json();
-          const parser = new DOMParser();
-          const xml = parser.parseFromString(data.contents, "text/xml");
-  
-          const items = Array.from(xml.querySelectorAll("item")).map((it) => ({
-            title: it.querySelector("title")?.textContent || "",
-            link: it.querySelector("link")?.textContent || "",
-            pubDate: it.querySelector("pubDate")?.textContent || "",
-            description: it.querySelector("description")?.textContent || "",
-            thumbnail:
-              it.querySelector("media\\:content, enclosure")?.getAttribute("url") || ""
-          }));
-  
-          allItems.push(...items);
+          // cache-busting param added
+          const response = await fetch(
+            `https://api.rss2json.com/v1/api.json?rss_url=${encodeURIComponent(url)}&_=${Date.now()}`
+          );
+          const data = await response.json();
+          if (data.items) allItems.push(...data.items);
         }
   
-        // Sort & trim to 30
         const sorted = allItems
           .sort((a, b) => new Date(b.pubDate) - new Date(a.pubDate))
           .slice(0, 30);
   
-        localStorage.setItem(cacheKey, JSON.stringify(sorted));
-        localStorage.setItem(`${cacheKey}_time`, now);
-        renderItems(sorted);
+        const translated = [];
+        for (const it of sorted) {
+          const title = await translateText(it.title);
+          translated.push({ ...it, title });
+        }
+  
+        localStorage.setItem(cacheKey, JSON.stringify(translated));
+        localStorage.setItem(cacheTimeKey, now);
+        renderItems(translated);
       } catch (err) {
         console.error("Error fetching feeds:", err);
         cards.innerHTML = "<p>❌ Failed to load news.</p>";
@@ -100,21 +111,20 @@ document.addEventListener("DOMContentLoaded", () => {
       cards.innerHTML = items
         .map(
           (n) => `
-          <div class="card">
-            <img src="${n.thumbnail || FALLBACK_IMG}" onerror="this.src='${FALLBACK_IMG}'" alt="">
-            <div class="card-content">
-              <h3><a href="${n.link}" target="_blank">${n.title}</a></h3>
-              <p class="meta">${new Date(n.pubDate).toLocaleString()} — ${new URL(n.link).hostname}</p>
-            </div>
+        <div class="card">
+          <img src="${n.thumbnail || n.enclosure?.link || FALLBACK_IMG}" onerror="this.src='${FALLBACK_IMG}'" alt="">
+          <div class="card-content">
+            <h3><a href="${n.link}" target="_blank">${n.title}</a></h3>
+            <p class="meta">${new Date(n.pubDate).toLocaleString()} — ${new URL(n.link).hostname}</p>
           </div>
-        `
+        </div>
+      `
         )
         .join("");
   
       lastUpdated.textContent = `Loaded ${fromCache ? "from cache" : "live"} • ${new Date().toLocaleTimeString()}`;
     }
   
-    // Controls
     refreshBtn.addEventListener("click", () => fetchFeeds(countrySelect.value, true));
     countrySelect.addEventListener("change", () => {
       selectedBadge.textContent = countrySelect.options[countrySelect.selectedIndex].text;
@@ -122,17 +132,10 @@ document.addEventListener("DOMContentLoaded", () => {
     });
     refreshIntervalSelect.addEventListener("change", () => {
       if (refreshTimer) clearInterval(refreshTimer);
-      refreshTimer = setInterval(
-        () => fetchFeeds(countrySelect.value, true),
-        Number(refreshIntervalSelect.value)
-      );
+      refreshTimer = setInterval(() => fetchFeeds(countrySelect.value, true), Number(refreshIntervalSelect.value));
     });
   
-    // Initial
     fetchFeeds(countrySelect.value);
-    refreshTimer = setInterval(
-      () => fetchFeeds(countrySelect.value, true),
-      Number(refreshIntervalSelect.value)
-    );
+    refreshTimer = setInterval(() => fetchFeeds(countrySelect.value, true), Number(refreshIntervalSelect.value));
   });
   
