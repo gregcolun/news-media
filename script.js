@@ -42,13 +42,24 @@ document.addEventListener("DOMContentLoaded", () => {
     let showImages = true;
     let refreshTimer = null;
   
+    async function translateText(text) {
+      if (!text) return text;
+      try {
+        const res = await fetch(`https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=en&dt=t&q=${encodeURIComponent(text)}`);
+        const data = await res.json();
+        return data[0][0][0];
+      } catch (e) {
+        console.warn("Translation failed:", e);
+        return text;
+      }
+    }
+  
     async function fetchFeeds(country, forceRefresh = false) {
       const cacheKey = `news_${country}`;
       const cache = localStorage.getItem(cacheKey);
       const cacheTime = localStorage.getItem(`${cacheKey}_time`);
       const now = Date.now();
   
-      // Cache validity: 1 hour
       if (cache && cacheTime && now - cacheTime < 3600000 && !forceRefresh) {
         const data = JSON.parse(cache);
         renderItems(data, true);
@@ -68,10 +79,16 @@ document.addEventListener("DOMContentLoaded", () => {
         }
   
         const sorted = allItems.sort((a, b) => new Date(b.pubDate) - new Date(a.pubDate)).slice(0, 30);
-        localStorage.setItem(cacheKey, JSON.stringify(sorted));
-        localStorage.setItem(`${cacheKey}_time`, now);
   
-        renderItems(sorted);
+        const translated = [];
+        for (const it of sorted) {
+          const title = await translateText(it.title);
+          translated.push({ ...it, title });
+        }
+  
+        localStorage.setItem(cacheKey, JSON.stringify(translated));
+        localStorage.setItem(`${cacheKey}_time`, now);
+        renderItems(translated);
       } catch (err) {
         console.error("Error fetching feeds:", err);
         cards.innerHTML = "<p>❌ Failed to load news.</p>";
@@ -95,30 +112,19 @@ document.addEventListener("DOMContentLoaded", () => {
       `).join("");
   
       lastUpdated.textContent = `Loaded ${fromCache ? "from cache" : "live"} • ${new Date().toLocaleTimeString()}`;
-  
-      // Retrigger translation
-      if (window.google && window.google.translate && window.google.translate.TranslateElement) {
-        const event = new Event("DOMContentLoaded");
-        document.dispatchEvent(event);
-      }
     }
   
-    // UI controls
-    refreshBtn.addEventListener("click", () => {
-      fetchFeeds(countrySelect.value, true);
-    });
-  
+    // --- UI Controls ---
+    refreshBtn.addEventListener("click", () => fetchFeeds(countrySelect.value, true));
     toggleImages.addEventListener("click", () => {
       showImages = !showImages;
       toggleImages.textContent = `Images: ${showImages ? "ON" : "OFF"}`;
-      fetchFeeds(countrySelect.value, true);
+      renderItems(JSON.parse(localStorage.getItem(`news_${countrySelect.value}`)) || []);
     });
-  
     countrySelect.addEventListener("change", () => {
       selectedBadge.textContent = countrySelect.options[countrySelect.selectedIndex].text;
       fetchFeeds(countrySelect.value, true);
     });
-  
     refreshIntervalSelect.addEventListener("change", () => {
       if (refreshTimer) clearInterval(refreshTimer);
       refreshTimer = setInterval(() => fetchFeeds(countrySelect.value, true), Number(refreshIntervalSelect.value));
