@@ -1,0 +1,15 @@
+{
+  "name": "news-media",
+  "version": "1.0.0",
+  "description": "Central Europe Live News with translation",
+  "main": "index.html",
+  "scripts": {
+    "start": "npx http-server -p 5500 -c-1"
+  },
+  "dependencies": {
+    "@vitalets/google-translate-api": "^9.2.1"
+  },
+  "devDependencies": {
+    "http-server": "^14.1.1"
+  }
+}
