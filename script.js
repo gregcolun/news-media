@@ -52,22 +52,24 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   
     // === Fetch feeds with caching ===
-    async function fetchFeedsFor(country) {
+    async function fetchFeedsFor(country, force = false) {
       const cacheKey = `news_${country}`;
-      const cache = localStorage.getItem(cacheKey);
       const interval = Number(refreshIntervalSelect.value) || 3600000;
       const now = Date.now();
   
-      // Use cache if fresh
-      if (cache) {
-        try {
-          const parsed = JSON.parse(cache);
-          if (now - parsed.fetchedAt < interval) {
-            renderGrouped(parsed.items);
-            lastUpdated.textContent = `Loaded from cache • ${new Date(parsed.fetchedAt).toLocaleTimeString()}`;
-            return;
-          }
-        } catch {}
+      // Use cache if fresh AND not forced
+      if (!force) {
+        const cache = localStorage.getItem(cacheKey);
+        if (cache) {
+          try {
+            const parsed = JSON.parse(cache);
+            if (now - parsed.fetchedAt < interval) {
+              renderGrouped(parsed.items);
+              lastUpdated.textContent = `Loaded from cache • ${new Date(parsed.fetchedAt).toLocaleTimeString()}`;
+              return;
+            }
+          } catch {}
+        }
       }
   
       cards.innerHTML = '<div class="small">⏳ Fetching latest news...</div>';
@@ -85,7 +87,9 @@ document.addEventListener("DOMContentLoaded", () => {
             let xmlText = null;
             for (const p of proxies) {
               try {
-                const r = await fetch(p);
+                // Add cache-busting param to be extra sure proxies don't hand us stale
+                const bust = p.includes("?") ? "&_ts=" + Date.now() : "?_ts=" + Date.now();
+                const r = await fetch(p + bust, { cache: "no-store" });
                 if (r.ok) {
                   const text = await r.text();
                   if (text.trim().startsWith("<")) {
@@ -124,7 +128,7 @@ document.addEventListener("DOMContentLoaded", () => {
   
         localStorage.setItem(cacheKey, JSON.stringify({ fetchedAt: now, items }));
         const duration = ((Date.now() - start) / 1000).toFixed(1);
-        lastUpdated.textContent = `Fetched • ${items.length} items • ${duration}s`;
+        lastUpdated.textContent = `Fetched • ${items.length} items • ${duration}s${force ? " • (manual refresh)" : ""}`;
         renderGrouped(items);
       } catch (e) {
         console.error(e);
@@ -167,11 +171,15 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   
     // === UI events ===
-    refreshBtn.addEventListener("click", () => fetchFeedsFor(countrySelect.value));
+    refreshBtn.addEventListener("click", () => {
+      // Force a fresh network fetch regardless of cache
+      fetchFeedsFor(countrySelect.value, true);
+    });
   
     countrySelect.addEventListener("change", () => {
       selectedBadge.textContent = countrySelect.options[countrySelect.selectedIndex].text
         .replace("🇭🇺","").replace("🇸🇮","").replace("🇭🇷","").replace("🇧🇦","");
+      // On country switch, prefer fresh if cache is stale; normal path is fine
       fetchFeedsFor(countrySelect.value);
     });
   
@@ -180,7 +188,7 @@ document.addEventListener("DOMContentLoaded", () => {
     toggleImagesBtn.addEventListener("click", () => {
       imagesEnabled = !imagesEnabled;
       toggleImagesBtn.textContent = `Images: ${imagesEnabled ? "ON" : "OFF"}`;
-      // Just re-render from cache (no refetch)
+      // Re-render from cache (no refetch)
       const cacheKey = `news_${countrySelect.value}`;
       const cache = localStorage.getItem(cacheKey);
       if (cache) {
