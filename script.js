@@ -3,106 +3,107 @@ document.addEventListener("DOMContentLoaded", () => {
       hungary: [
         "https://index.hu/24ora/rss/",
         "https://telex.hu/rss",
-        "https://444.hu/feed",
-        "https://24.hu/feed/",
-        "https://hvg.hu/rss"
+        "https://444.hu/feed"
+      ],
+      croatia: [
+        "https://www.24sata.hr/feeds/news.xml",
+        "https://www.jutarnji.hr/rss"
       ],
       slovenia: [
         "https://www.rtvslo.si/rss",
-        "https://www.delo.si/rss",
-        "https://www.vecer.com/rss",
-        "https://siol.net/rss",
-        "https://www.24ur.com/rss"
-      ],
-      croatia: [
-        "https://www.jutarnji.hr/rss",
-        "https://www.24sata.hr/feeds/news.xml",
-        "https://www.index.hr/rss",
-        "https://www.vecernji.hr/feed",
-        "https://dnevnik.hr/rss"
+        "https://www.delo.si/rss"
       ],
       bosnia: [
-        "https://www.klix.ba/rss",
-        "https://www.aa.com.tr/ba/rss",
-        "https://avaz.ba/rss",
-        "https://www.nezavisne.com/rss",
-        "https://www.zenit.ba/feed/"
+        "https://www.klix.ba/rss"
       ]
     };
   
-    const FALLBACK_IMG = "TV_noise.jpg";
     const cards = document.getElementById("cards");
     const countrySelect = document.getElementById("countrySelect");
     const refreshBtn = document.getElementById("refreshBtn");
-    const lastUpdated = document.getElementById("lastUpdated");
+    const toggleImages = document.getElementById("toggleImages");
     const selectedBadge = document.getElementById("selectedBadge");
-    const refreshIntervalSelect = document.getElementById("refreshInterval");
+    const lastUpdated = document.getElementById("lastUpdated");
   
-    let refreshTimer = null;
+    let imagesEnabled = true;
+    const FALLBACK_IMG = "TV_noise.jpg"; // local image in your project folder
   
-    async function translateText(text) {
-      if (!text) return text;
-      try {
-        const res = await fetch(
-          `https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=en&dt=t&q=${encodeURIComponent(text)}`
-        );
-        const data = await res.json();
-        return data[0][0][0];
-      } catch (e) {
-        console.warn("Translation failed:", e);
-        return text;
-      }
-    }
-  
-    async function fetchFeeds(country, forceRefresh = false) {
-      const cacheKey = `news_${country}`;
-      const cacheTimeKey = `${cacheKey}_time`;
-      const now = Date.now();
-  
-      const cache = localStorage.getItem(cacheKey);
-      const cacheTime = localStorage.getItem(cacheTimeKey);
-  
-      if (cache && cacheTime && now - cacheTime < 3600000 && !forceRefresh) {
-        const data = JSON.parse(cache);
-        renderItems(data, true);
-        return;
-      }
-  
+    async function fetchFeedsFor(country) {
+      const urls = FEEDS[country] || [];
       cards.innerHTML = '<div class="small">⏳ Fetching latest news...</div>';
+      const start = Date.now();
   
       try {
-        const urls = FEEDS[country];
-        const allItems = [];
+        const responses = await Promise.all(
+          urls.map(async (u) => {
+            const proxies = [
+              `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(u)}`,
+              `https://corsproxy.io/?${encodeURIComponent(u)}`,
+              `https://api.allorigins.win/raw?url=${encodeURIComponent(u)}`
+            ];
   
-        for (const url of urls) {
-          // cache-busting param added
-          const response = await fetch(
-            `https://api.rss2json.com/v1/api.json?rss_url=${encodeURIComponent(url)}&_=${Date.now()}`
-          );
-          const data = await response.json();
-          if (data.items) allItems.push(...data.items);
-        }
+            let xmlText = null;
+            for (const proxy of proxies) {
+              try {
+                const res = await fetch(proxy);
+                if (res.ok) {
+                  const text = await res.text();
+                  if (text.trim().startsWith("<")) {
+                    xmlText = text;
+                    break;
+                  }
+                }
+              } catch (e) {
+                console.warn("Proxy failed:", proxy);
+              }
+            }
   
-        const sorted = allItems
-          .sort((a, b) => new Date(b.pubDate) - new Date(a.pubDate))
+            if (!xmlText) return [];
+  
+            const parser = new DOMParser();
+            const xml = parser.parseFromString(xmlText, "text/xml");
+  
+            return Array.from(xml.querySelectorAll("item")).map((it) => {
+              const desc = it.querySelector("description")?.textContent || "";
+              const imgMatch = desc.match(/<img[^>]+src="([^">]+)"/);
+              const image =
+                it.querySelector("media\\:content, enclosure")?.getAttribute("url") ||
+                (imgMatch ? imgMatch[1] : FALLBACK_IMG);
+  
+              return {
+                title: it.querySelector("title")?.textContent?.trim() || "",
+                link: it.querySelector("link")?.textContent?.trim() || "",
+                pubDate: it.querySelector("pubDate")?.textContent?.trim() || "",
+                thumbnail: image
+              };
+            });
+          })
+        );
+  
+        let items = responses.flat();
+        if (!items.length) throw new Error("No items loaded");
+  
+        items.sort((a, b) => new Date(b.pubDate) - new Date(a.pubDate));
+  
+        // Keep last 24h
+        const now = new Date();
+        items = items
+          .filter((it) => {
+            const d = new Date(it.pubDate);
+            return now - d < 86400000;
+          })
           .slice(0, 30);
   
-        const translated = [];
-        for (const it of sorted) {
-          const title = await translateText(it.title);
-          translated.push({ ...it, title });
-        }
-  
-        localStorage.setItem(cacheKey, JSON.stringify(translated));
-        localStorage.setItem(cacheTimeKey, now);
-        renderItems(translated);
+        const duration = ((Date.now() - start) / 1000).toFixed(1);
+        lastUpdated.textContent = `Updated: ${new Date().toLocaleString()} • ${items.length} items • ${duration}s`;
+        renderItems(items);
       } catch (err) {
         console.error("Error fetching feeds:", err);
-        cards.innerHTML = "<p>❌ Failed to load news.</p>";
+        cards.innerHTML = "<p style='color:#ff6b6b'>❌ Failed to load news.</p>";
       }
     }
   
-    function renderItems(items, fromCache = false) {
+    function renderItems(items) {
       if (!items.length) {
         cards.innerHTML = "<p>No news found for today.</p>";
         return;
@@ -111,31 +112,44 @@ document.addEventListener("DOMContentLoaded", () => {
       cards.innerHTML = items
         .map(
           (n) => `
-        <div class="card">
-          <img src="${n.thumbnail || n.enclosure?.link || FALLBACK_IMG}" onerror="this.src='${FALLBACK_IMG}'" alt="">
-          <div class="card-content">
-            <h3><a href="${n.link}" target="_blank">${n.title}</a></h3>
-            <p class="meta">${new Date(n.pubDate).toLocaleString()} — ${new URL(n.link).hostname}</p>
+          <div class="card">
+            ${
+              imagesEnabled
+                ? `<img src="${n.thumbnail}" alt=""
+                   onerror="this.src='${FALLBACK_IMG}'">`
+                : ""
+            }
+            <div class="card-content">
+              <h3><a href="${n.link}" target="_blank" rel="noopener noreferrer">${n.title}</a></h3>
+              <p class="meta">${new Date(n.pubDate).toLocaleString()} — ${
+            n.link ? new URL(n.link).hostname : "Source"
+          }</p>
+            </div>
           </div>
-        </div>
-      `
+        `
         )
         .join("");
-  
-      lastUpdated.textContent = `Loaded ${fromCache ? "from cache" : "live"} • ${new Date().toLocaleTimeString()}`;
     }
   
-    refreshBtn.addEventListener("click", () => fetchFeeds(countrySelect.value, true));
+    refreshBtn.addEventListener("click", () => {
+      fetchFeedsFor(countrySelect.value);
+    });
+  
+    toggleImages.addEventListener("click", () => {
+      imagesEnabled = !imagesEnabled;
+      toggleImages.textContent = `Images: ${imagesEnabled ? "ON" : "OFF"}`;
+      fetchFeedsFor(countrySelect.value);
+    });
+  
     countrySelect.addEventListener("change", () => {
-      selectedBadge.textContent = countrySelect.options[countrySelect.selectedIndex].text;
-      fetchFeeds(countrySelect.value, true);
-    });
-    refreshIntervalSelect.addEventListener("change", () => {
-      if (refreshTimer) clearInterval(refreshTimer);
-      refreshTimer = setInterval(() => fetchFeeds(countrySelect.value, true), Number(refreshIntervalSelect.value));
+      selectedBadge.textContent = countrySelect.options[countrySelect.selectedIndex].text
+        .replace("🇭🇺", "")
+        .replace("🇸🇮", "")
+        .replace("🇭🇷", "")
+        .replace("🇧🇦", "");
+      fetchFeedsFor(countrySelect.value);
     });
   
-    fetchFeeds(countrySelect.value);
-    refreshTimer = setInterval(() => fetchFeeds(countrySelect.value, true), Number(refreshIntervalSelect.value));
+    // Initial load
+    fetchFeedsFor(countrySelect.value);
   });
-  
