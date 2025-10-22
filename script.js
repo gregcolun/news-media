@@ -1,39 +1,80 @@
 document.addEventListener("DOMContentLoaded", () => {
+    // === 5 major sources per country ===
     const FEEDS = {
       hungary: [
         "https://index.hu/24ora/rss/",
         "https://telex.hu/rss",
-        "https://444.hu/feed"
+        "https://444.hu/feed",
+        "https://hvg.hu/rss",
+        "https://magyarnemzet.hu/rss"
       ],
       croatia: [
         "https://www.24sata.hr/feeds/news.xml",
-        "https://www.jutarnji.hr/rss"
+        "https://www.jutarnji.hr/rss",
+        "https://www.vecernji.hr/rss",
+        "https://www.dnevnik.hr/rss",
+        "https://slobodnadalmacija.hr/feed"
       ],
       slovenia: [
         "https://www.rtvslo.si/rss",
-        "https://www.delo.si/rss"
+        "https://www.delo.si/rss",
+        "https://www.siol.net/rss",
+        "https://www.24ur.com/rss",
+        "https://www.slovenskenovice.si/rss"
       ],
       bosnia: [
-        "https://www.klix.ba/rss"
+        "https://www.klix.ba/rss",
+        "https://www.avaz.ba/rss",
+        "https://www.oslobodjenje.ba/rss",
+        "https://www.nezavisne.com/rss",
+        "https://radiosarajevo.ba/rss"
       ]
     };
   
     const cards = document.getElementById("cards");
     const countrySelect = document.getElementById("countrySelect");
     const refreshBtn = document.getElementById("refreshBtn");
-    const toggleImages = document.getElementById("toggleImages");
+    const refreshIntervalSelect = document.getElementById("refreshInterval");
+    const toggleImagesBtn = document.getElementById("toggleImages");
     const selectedBadge = document.getElementById("selectedBadge");
     const lastUpdated = document.getElementById("lastUpdated");
   
+    const FALLBACK_IMG = "TV_noise.jpg";
+    let refreshTimer = null;
     let imagesEnabled = true;
-    const FALLBACK_IMG = "TV_noise.jpg"; // local image in your project folder
   
+    // === Daily cache reset ===
+    const today = new Date().toDateString();
+    const savedDay = localStorage.getItem("cacheDay");
+    if (savedDay !== today) {
+      localStorage.clear();
+      localStorage.setItem("cacheDay", today);
+    }
+  
+    // === Fetch feeds with caching ===
     async function fetchFeedsFor(country) {
-      const urls = FEEDS[country] || [];
+      const cacheKey = `news_${country}`;
+      const cache = localStorage.getItem(cacheKey);
+      const interval = Number(refreshIntervalSelect.value) || 3600000;
+      const now = Date.now();
+  
+      // Use cache if fresh
+      if (cache) {
+        try {
+          const parsed = JSON.parse(cache);
+          if (now - parsed.fetchedAt < interval) {
+            renderGrouped(parsed.items);
+            lastUpdated.textContent = `Loaded from cache • ${new Date(parsed.fetchedAt).toLocaleTimeString()}`;
+            return;
+          }
+        } catch {}
+      }
+  
       cards.innerHTML = '<div class="small">⏳ Fetching latest news...</div>';
       const start = Date.now();
   
       try {
+        const urls = FEEDS[country] || [];
         const responses = await Promise.all(
           urls.map(async (u) => {
             const proxies = [
@@ -41,23 +82,19 @@ document.addEventListener("DOMContentLoaded", () => {
               `https://corsproxy.io/?${encodeURIComponent(u)}`,
               `https://api.allorigins.win/raw?url=${encodeURIComponent(u)}`
             ];
-  
             let xmlText = null;
-            for (const proxy of proxies) {
+            for (const p of proxies) {
               try {
-                const res = await fetch(proxy);
-                if (res.ok) {
-                  const text = await res.text();
+                const r = await fetch(p);
+                if (r.ok) {
+                  const text = await r.text();
                   if (text.trim().startsWith("<")) {
                     xmlText = text;
                     break;
                   }
                 }
-              } catch (e) {
-                console.warn("Proxy failed:", proxy);
-              }
+              } catch {}
             }
-  
             if (!xmlText) return [];
   
             const parser = new DOMParser();
@@ -81,76 +118,87 @@ document.addEventListener("DOMContentLoaded", () => {
         );
   
         let items = responses.flat();
-        if (!items.length) throw new Error("No items loaded");
-  
         items.sort((a, b) => new Date(b.pubDate) - new Date(a.pubDate));
+        // keep a deeper pool so groups have content
+        items = items.filter((i) => i.title && i.link).slice(0, 120);
   
-        // Keep last 24h
-        const now = new Date();
-        items = items
-          .filter((it) => {
-            const d = new Date(it.pubDate);
-            return now - d < 86400000;
-          })
-          .slice(0, 30);
-  
+        localStorage.setItem(cacheKey, JSON.stringify({ fetchedAt: now, items }));
         const duration = ((Date.now() - start) / 1000).toFixed(1);
-        lastUpdated.textContent = `Updated: ${new Date().toLocaleString()} • ${items.length} items • ${duration}s`;
-        renderItems(items);
-      } catch (err) {
-        console.error("Error fetching feeds:", err);
+        lastUpdated.textContent = `Fetched • ${items.length} items • ${duration}s`;
+        renderGrouped(items);
+      } catch (e) {
+        console.error(e);
         cards.innerHTML = "<p style='color:#ff6b6b'>❌ Failed to load news.</p>";
       }
     }
   
-    function renderItems(items) {
-      if (!items.length) {
-        cards.innerHTML = "<p>No news found for today.</p>";
-        return;
-      }
+    // === Group news by time window (client-side only) ===
+    function renderGrouped(items) {
+      const now = Date.now();
+      const oneH = 3600000, threeH = 10800000;
   
-      cards.innerHTML = items
-        .map(
-          (n) => `
+      const group1 = items.filter((i) => now - new Date(i.pubDate) < oneH);
+      const group2 = items.filter((i) => {
+        const age = now - new Date(i.pubDate);
+        return age >= oneH && age < threeH;
+      });
+      const group3 = items.filter((i) => now - new Date(i.pubDate) >= threeH);
+  
+      const block = (label, arr) => {
+        if (!arr.length) return "";
+        const cardsHtml = arr.map(n => `
           <div class="card">
-            ${
-              imagesEnabled
-                ? `<img src="${n.thumbnail}" alt=""
-                   onerror="this.src='${FALLBACK_IMG}'">`
-                : ""
-            }
+            ${imagesEnabled ? `<img src="${n.thumbnail}" alt="" onerror="this.src='${FALLBACK_IMG}'">` : ""}
             <div class="card-content">
               <h3><a href="${n.link}" target="_blank" rel="noopener noreferrer">${n.title}</a></h3>
-              <p class="meta">${new Date(n.pubDate).toLocaleString()} — ${
-            n.link ? new URL(n.link).hostname : "Source"
-          }</p>
+              <p class="meta">${new Date(n.pubDate).toLocaleString()} — ${new URL(n.link).hostname}</p>
             </div>
           </div>
-        `
-        )
-        .join("");
+        `).join("");
+        return `<h2 style="font-size:16px;margin:12px 0">${label}</h2>${cardsHtml}`;
+      };
+  
+      const html =
+        block("🕐 Last 1 hour", group1) +
+        block("🕒 Last 3 hours", group2) +
+        block("🕗 Earlier Today", group3);
+  
+      cards.innerHTML = html || "<p>No news for this period.</p>";
     }
   
-    refreshBtn.addEventListener("click", () => {
-      fetchFeedsFor(countrySelect.value);
-    });
-  
-    toggleImages.addEventListener("click", () => {
-      imagesEnabled = !imagesEnabled;
-      toggleImages.textContent = `Images: ${imagesEnabled ? "ON" : "OFF"}`;
-      fetchFeedsFor(countrySelect.value);
-    });
+    // === UI events ===
+    refreshBtn.addEventListener("click", () => fetchFeedsFor(countrySelect.value));
   
     countrySelect.addEventListener("change", () => {
       selectedBadge.textContent = countrySelect.options[countrySelect.selectedIndex].text
-        .replace("🇭🇺", "")
-        .replace("🇸🇮", "")
-        .replace("🇭🇷", "")
-        .replace("🇧🇦", "");
+        .replace("🇭🇺","").replace("🇸🇮","").replace("🇭🇷","").replace("🇧🇦","");
       fetchFeedsFor(countrySelect.value);
     });
   
-    // Initial load
+    refreshIntervalSelect.addEventListener("change", setupAutoRefresh);
+  
+    toggleImagesBtn.addEventListener("click", () => {
+      imagesEnabled = !imagesEnabled;
+      toggleImagesBtn.textContent = `Images: ${imagesEnabled ? "ON" : "OFF"}`;
+      // Just re-render from cache (no refetch)
+      const cacheKey = `news_${countrySelect.value}`;
+      const cache = localStorage.getItem(cacheKey);
+      if (cache) {
+        try {
+          const parsed = JSON.parse(cache);
+          renderGrouped(parsed.items);
+        } catch {}
+      }
+    });
+  
+    function setupAutoRefresh() {
+      if (refreshTimer) clearInterval(refreshTimer);
+      const ms = Number(refreshIntervalSelect.value) || 3600000;
+      refreshTimer = setInterval(() => fetchFeedsFor(countrySelect.value), ms);
+    }
+  
+    // === Init ===
     fetchFeedsFor(countrySelect.value);
+    setupAutoRefresh();
   });
   
