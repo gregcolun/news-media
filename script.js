@@ -27,9 +27,70 @@ document.addEventListener("DOMContentLoaded", () => {
   
     let imagesEnabled = true;
     const FALLBACK_IMG = "TV_noise.jpg"; // local image in your project folder
+
+    // Local storage functions
+    function getTodayKey() {
+      return `news_${new Date().toDateString()}`;
+    }
+
+    function getStoredArticles() {
+      const todayKey = getTodayKey();
+      const stored = localStorage.getItem(todayKey);
+      return stored ? JSON.parse(stored) : {};
+    }
+
+    function saveArticles(country, articles) {
+      const todayKey = getTodayKey();
+      const stored = getStoredArticles();
+      stored[country] = articles;
+      localStorage.setItem(todayKey, JSON.stringify(stored));
+    }
+
+    function getStoredArticlesForCountry(country) {
+      const stored = getStoredArticles();
+      return stored[country] || [];
+    }
+
+    function clearOldArticles() {
+      const today = new Date().toDateString();
+      const keys = Object.keys(localStorage);
+      keys.forEach(key => {
+        if (key.startsWith('news_') && key !== `news_${today}`) {
+          localStorage.removeItem(key);
+        }
+      });
+    }
+
+    function mergeArticles(existing, newArticles) {
+      const existingMap = new Map();
+      existing.forEach(article => {
+        existingMap.set(article.link, article);
+      });
+      
+      newArticles.forEach(article => {
+        if (!existingMap.has(article.link)) {
+          existingMap.set(article.link, article);
+        }
+      });
+      
+      return Array.from(existingMap.values());
+    }
   
-    async function fetchFeedsFor(country) {
+    async function fetchFeedsFor(country, isRefresh = false) {
       const urls = FEEDS[country] || [];
+      
+      // Clear old articles from previous days
+      clearOldArticles();
+      
+      // Get existing articles from storage
+      const existingArticles = getStoredArticlesForCountry(country);
+      
+      // If we have existing articles and this is not a refresh, show them immediately
+      if (existingArticles.length > 0 && !isRefresh) {
+        renderItems(existingArticles);
+        lastUpdated.textContent = `📱 Loaded from cache • ${existingArticles.length} items`;
+      }
+      
       cards.innerHTML = '<div class="small">⏳ Fetching latest news...</div>';
       const start = Date.now();
   
@@ -80,65 +141,132 @@ document.addEventListener("DOMContentLoaded", () => {
           })
         );
   
-        let items = responses.flat();
-        if (!items.length) throw new Error("No items loaded");
+        let newItems = responses.flat();
+        if (!newItems.length) {
+          // If no new items but we have existing ones, show them
+          if (existingArticles.length > 0) {
+            renderItems(existingArticles);
+            lastUpdated.textContent = `No new articles • ${existingArticles.length} cached items`;
+            return;
+          }
+          throw new Error("No items loaded");
+        }
   
-        items.sort((a, b) => new Date(b.pubDate) - new Date(a.pubDate));
+        newItems.sort((a, b) => new Date(b.pubDate) - new Date(a.pubDate));
   
-        // Keep last 24h
+        // Keep last 24h for new items
         const now = new Date();
-        items = items
+        newItems = newItems
           .filter((it) => {
             const d = new Date(it.pubDate);
             return now - d < 86400000;
-          })
-          .slice(0, 30);
+          });
+  
+        // Merge with existing articles
+        const allItems = mergeArticles(existingArticles, newItems);
+        allItems.sort((a, b) => new Date(b.pubDate) - new Date(a.pubDate));
+        
+        // Keep all articles from today (no limit)
+        const finalItems = allItems;
+        
+        // Save to localStorage
+        saveArticles(country, finalItems);
   
         const duration = ((Date.now() - start) / 1000).toFixed(1);
-        lastUpdated.textContent = `Updated: ${new Date().toLocaleString()} • ${items.length} items • ${duration}s`;
-        renderItems(items);
+        const newCount = newItems.length;
+        const totalCount = finalItems.length;
+        lastUpdated.textContent = `🔄 Updated: ${new Date().toLocaleString()} • ${totalCount} items (${newCount} new) • ${duration}s`;
+        renderItems(finalItems);
       } catch (err) {
         console.error("Error fetching feeds:", err);
-        cards.innerHTML = "<p style='color:#ff6b6b'>❌ Failed to load news.</p>";
+        // If we have cached articles, show them even if fetch failed
+        if (existingArticles.length > 0) {
+          renderItems(existingArticles);
+          lastUpdated.textContent = `Using cached articles • ${existingArticles.length} items (fetch failed)`;
+        } else {
+          cards.innerHTML = "<p style='color:#ff6b6b'>❌ Failed to load news.</p>";
+          cards.classList.remove('has-sections');
+        }
       }
     }
   
     function renderItems(items) {
       if (!items.length) {
         cards.innerHTML = "<p>No news found for today.</p>";
+        cards.classList.remove('has-sections');
         return;
       }
   
-      cards.innerHTML = items
-        .map(
-          (n) => `
-          <div class="card">
-            ${
-              imagesEnabled
-                ? `<img src="${n.thumbnail}" alt=""
-                   onerror="this.src='${FALLBACK_IMG}'">`
-                : ""
-            }
-            <div class="card-content">
-              <h3><a href="${n.link}" target="_blank" rel="noopener noreferrer">${n.title}</a></h3>
-              <p class="meta">${new Date(n.pubDate).toLocaleString()} — ${
-            n.link ? new URL(n.link).hostname : "Source"
-          }</p>
+      // Split articles into "Latest" and "Earlier Today" based on time
+      const now = new Date();
+      const threeHoursAgo = new Date(now.getTime() - (3 * 60 * 60 * 1000)); // 3 hours ago
+      
+      const latestItems = items.filter(item => {
+        const itemDate = new Date(item.pubDate);
+        return itemDate >= threeHoursAgo;
+      });
+      
+      const earlierItems = items.filter(item => {
+        const itemDate = new Date(item.pubDate);
+        return itemDate < threeHoursAgo;
+      });
+      
+  
+      const renderCard = (n) => `
+        <div class="card">
+          ${
+            imagesEnabled
+              ? `<img src="${n.thumbnail}" alt=""
+                 onerror="this.src='${FALLBACK_IMG}'">`
+              : ""
+          }
+          <div class="card-content">
+            <h3><a href="${n.link}" target="_blank" rel="noopener noreferrer">${n.title}</a></h3>
+            <p class="meta">${new Date(n.pubDate).toLocaleString()} — ${
+          n.link ? new URL(n.link).hostname : "Source"
+        }</p>
+          </div>
+        </div>
+      `;
+  
+      let html = '';
+      
+      // Latest section
+      if (latestItems.length > 0) {
+        html += `
+          <div class="section">
+            <h2 class="section-title">Latest News (Last 3 Hours) <span class="count">(${latestItems.length})</span></h2>
+            <div class="articles-grid">
+              ${latestItems.map(renderCard).join('')}
             </div>
           </div>
-        `
-        )
-        .join("");
+        `;
+      }
+      
+      // Earlier Today section
+      if (earlierItems.length > 0) {
+        html += `
+          <div class="section">
+            <h2 class="section-title">Earlier Today <span class="count">(${earlierItems.length})</span></h2>
+            <div class="articles-grid">
+              ${earlierItems.map(renderCard).join('')}
+            </div>
+          </div>
+        `;
+      }
+      
+      cards.innerHTML = html;
+      cards.classList.add('has-sections');
     }
   
     refreshBtn.addEventListener("click", () => {
-      fetchFeedsFor(countrySelect.value);
+      fetchFeedsFor(countrySelect.value, true);
     });
   
     toggleImages.addEventListener("click", () => {
       imagesEnabled = !imagesEnabled;
       toggleImages.textContent = `Images: ${imagesEnabled ? "ON" : "OFF"}`;
-      fetchFeedsFor(countrySelect.value);
+      fetchFeedsFor(countrySelect.value, false);
     });
   
     countrySelect.addEventListener("change", () => {
@@ -147,7 +275,7 @@ document.addEventListener("DOMContentLoaded", () => {
         .replace("🇸🇮", "")
         .replace("🇭🇷", "")
         .replace("🇧🇦", "");
-      fetchFeedsFor(countrySelect.value);
+      fetchFeedsFor(countrySelect.value, false);
     });
   
     // Initial load

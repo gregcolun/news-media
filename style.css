@@ -108,10 +108,68 @@
   
   /* --- CLEAN FIXED CARD DESIGN --- */
   .cards {
+    margin-top: 20px;
+    display: block;
+  }
+
+  /* When cards container has sections, use block layout */
+  .cards.has-sections {
+    display: block;
+  }
+
+  /* When cards container has direct cards (no sections), use grid layout */
+  .cards:not(.has-sections) {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
     gap: 18px;
-    margin-top: 20px;
+  }
+
+  .section {
+    margin-bottom: 32px;
+    width: 100%;
+    display: block;
+  }
+
+  .section:last-child {
+    margin-bottom: 0;
+  }
+
+  .section-title {
+    font-size: 18px;
+    font-weight: 700;
+    color: #e6eef8;
+    margin: 0 0 16px 0;
+    padding-bottom: 8px;
+    border-bottom: 2px solid rgba(124, 58, 237, 0.3);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .section-title::before {
+    content: '';
+    width: 4px;
+    height: 20px;
+    background: linear-gradient(135deg, var(--accent), #06b6d4);
+    border-radius: 2px;
+  }
+
+  .section-title .count {
+    font-size: 14px;
+    font-weight: 400;
+    color: var(--muted);
+    background: rgba(255, 255, 255, 0.05);
+    padding: 2px 8px;
+    border-radius: 12px;
+    margin-left: 8px;
+  }
+
+  .articles-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+    gap: 18px;
+    margin-top: 16px;
+    width: 100%;
   }
   
   .card {
