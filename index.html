@@ -3,11 +3,11 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Central Europe — Live News</title>
-  <link rel="stylesheet" href="style.css" />
+  <title>Central Europe — Live News (EN)</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
 </head>
 <body>
   <div class="wrap">
@@ -16,7 +16,7 @@
         <div class="logo">CE</div>
         <div>
           <h1>Central Europe — Live News</h1>
-          <p class="lead">Real-time headlines from Hungary, Croatia, Slovenia &amp; Bosnia and Herzegovina.</p>
+          <p class="lead">Real-time headlines from Hungary, Croatia, Slovenia & Bosnia and Herzegovina.</p>
         </div>
       </div>
       <div class="controls">
@@ -24,54 +24,51 @@
           <option value="hungary">🇭🇺 Hungary</option>
           <option value="slovenia">🇸🇮 Slovenia</option>
           <option value="croatia">🇭🇷 Croatia</option>
-          <option value="bosnia">🇧🇦 Bosnia &amp; Herzegovina</option>
+          <option value="bosnia">🇧🇦 Bosnia & Herzegovina</option>
         </select>
         <select id="refreshInterval">
           <option value="1800000">Refresh 30 min</option>
           <option value="3600000" selected>Refresh 60 min</option>
         </select>
         <button id="refreshBtn">Refresh now</button>
-        <button id="toggleImages" class="toggle">Images: ON</button>
+        <button id="toggleImages">Images: ON</button>
       </div>
     </header>
 
     <div class="grid">
       <main class="feed">
-        <div class="feed-header">
-          <div class="badge" id="selectedBadge">Hungary</div>
-          <div class="small" id="lastUpdated">—</div>
+        <div style="display:flex;justify-content:space-between;align-items:center">
+          <div style="display:flex;gap:10px;align-items:center">
+            <div class="badge" id="selectedBadge">Hungary</div>
+            <div class="small" id="lastUpdated">—</div>
+          </div>
         </div>
-        <div id="cards"></div>
+        <div class="cards" id="cards"></div>
       </main>
 
       <aside class="sidebar">
         <h3>About</h3>
-        <p class="small">
-          Headlines from major Central European outlets, updated on a safe schedule. Click any headline to open the original article.
-        </p>
+        <p class="small">Headlines from major Central European outlets, updated on a safe schedule. Click any headline to open the original article.</p>
+
+        <div id="google_translate_element" style="margin-top:20px;"></div>
       </aside>
     </div>
 
     <footer>
-      <div class="small">© 2025 Central Europe News Aggregator. Made by Greg Colun.</div>
+      <div class="small">Made for Greg’s sister — updated safely using public RSS feeds. Built for Vercel.</div>
     </footer>
   </div>
+
   <script src="script.js"></script>
-  <div id="google_translate_element" style="margin-top:20px;text-align:center;"></div>
-
-<script type="text/javascript">
-function googleTranslateElementInit() {
-  new google.translate.TranslateElement(
-    {
-      pageLanguage: 'en',
-      includedLanguages: 'en,hu,sl,hr,bs',
-      layout: google.translate.TranslateElement.InlineLayout.SIMPLE
-    },
-    'google_translate_element'
-  );
-}
-</script>
-<script src="//translate.google.com/translate_a/element.js?cb=googleTranslateElementInit"></script>
-
+  <script>
+    function googleTranslateElementInit() {
+      new google.translate.TranslateElement({
+        pageLanguage: 'en',
+        includedLanguages: 'en,hu,sl,hr,bs',
+        layout: google.translate.TranslateElement.InlineLayout.SIMPLE
+      }, 'google_translate_element');
+    }
+  </script>
+  <script src="//translate.google.com/translate_a/element.js?cb=googleTranslateElementInit"></script>
 </body>
 </html>
