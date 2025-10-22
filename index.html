@@ -55,23 +55,21 @@
 
       <aside class="sidebar">
         <h3 style="margin:0 0 8px 0">About</h3>
-        <p class="small">This app collects RSS feed items from major news outlets in the selected country, translates titles + short descriptions to English (using a free translator API), and shows the latest items. Clicking a headline opens the original article.</p>
-        <div class="note">⚠️ The translations are automated and may be imperfect. Original content remains at the source site.</div>
+        <p class="small">Stay informed with the latest headlines from Central Europe, gathered in real time from trusted national news outlets.
+            <br><br>The app automatically fetches fresh stories every hour, organizes them by country, and lets you open the original articles with one click.
+            <br><br>Built for speed, clarity, and simplicity — a single place to follow current events across Hungary, Croatia, Slovenia, and Bosnia & Herzegovina.</p>
 
-        <h4 style="margin-top:12px">Sources (editable)</h4>
         <div id="sourcesList" style="font-size:13px;color:var(--muted);margin-top:8px"></div>
 
         <h4 style="margin-top:12px">Options</h4>
         <div style="display:flex;gap:8px;margin-top:8px">
           <div class="toggle" id="toggleImages">Images: ON</div>
-          <div class="toggle" id="toggleTranslate">Translate: ON</div>
         </div>
-        <div style="margin-top:12px;font-size:13px;color:var(--muted)">Built for free hosting. Recommended: host on Vercel / Netlify / GitHub Pages.</div>
       </aside>
     </div>
 
     <footer>
-      <div class="small">Made for you — Greg. Data comes from public RSS feeds (no scraping) and free translation APIs. Refresh interval can be changed above.</div>
+      <div class="small">Central Europe News Fetcher</div>
     </footer>
   </div>
   <script src="script.js"></script>
