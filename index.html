@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Central Europe — Live News (EN)</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <div class="brand">
+        <div class="logo">CE</div>
+        <div>
+          <h1>Central Europe — Live News</h1>
+        </div>
+      </div>
+      <div class="controls">
+        <div class="controls-group">
+          <select id="countrySelect" aria-label="Select country">
+            <option value="hungary">🇭🇺 Hungary</option>
+            <option value="slovenia">🇸🇮 Slovenia</option>
+            <option value="croatia">🇭🇷 Croatia</option>
+            <option value="bosnia">🇧🇦 Bosnia &amp; Herzegovina</option>
+          </select>
+          <select id="refreshInterval" title="Auto refresh interval">
+            <option value="300000">Refresh: 5m</option>
+            <option value="600000">Refresh: 10m</option>
+            <option value="1800000">Refresh: 30m</option>
+            <option value="3600000" selected>Refresh: 60m</option>
+          </select>
+          <button id="refreshBtn">Refresh now</button>
+        </div>
+      </div>
+    </header>
+
+    <div class="grid">
+      <main class="feed" id="feed">
+        <div style="display:flex;justify-content:space-between;align-items:center">
+          <div style="display:flex;gap:10px;align-items:center">
+            <div class="badge" id="selectedBadge">Hungary</div>
+            <div class="small" id="lastUpdated">—</div>
+          </div>
+          <div id="status" style="display:flex;gap:10px;align-items:center"></div>
+        </div>
+
+        <div style="margin-top:16px">
+          <div class="cards" id="cards"></div>
+        </div>
+
+      </main>
+
+      <aside class="sidebar">
+        <h3 style="margin:0 0 8px 0">About</h3>
+        <p class="small">This app collects RSS feed items from major news outlets in the selected country, translates titles + short descriptions to English (using a free translator API), and shows the latest items. Clicking a headline opens the original article.</p>
+        <div class="note">⚠️ The translations are automated and may be imperfect. Original content remains at the source site.</div>
+
+        <h4 style="margin-top:12px">Sources (editable)</h4>
+        <div id="sourcesList" style="font-size:13px;color:var(--muted);margin-top:8px"></div>
+
+        <h4 style="margin-top:12px">Options</h4>
+        <div style="display:flex;gap:8px;margin-top:8px">
+          <div class="toggle" id="toggleImages">Images: ON</div>
+          <div class="toggle" id="toggleTranslate">Translate: ON</div>
+        </div>
+        <div style="margin-top:12px;font-size:13px;color:var(--muted)">Built for free hosting. Recommended: host on Vercel / Netlify / GitHub Pages.</div>
+      </aside>
+    </div>
+
+    <footer>
+      <div class="small">Made for you — Greg. Data comes from public RSS feeds (no scraping) and free translation APIs. Refresh interval can be changed above.</div>
+    </footer>
+  </div>
+  <script src="script.js"></script>
+
+</body>
+</html>
