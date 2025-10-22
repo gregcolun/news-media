@@ -33,12 +33,27 @@ document.addEventListener("DOMContentLoaded", () => {
     const cards = document.getElementById("cards");
     const countrySelect = document.getElementById("countrySelect");
     const refreshBtn = document.getElementById("refreshBtn");
+    const translateBtn = document.getElementById("translateBtn");
     const toggleImages = document.getElementById("toggleImages");
     const selectedBadge = document.getElementById("selectedBadge");
     const lastUpdated = document.getElementById("lastUpdated");
   
     let imagesEnabled = true;
+    let translationEnabled = false;
     const FALLBACK_IMG = "TV_noise.jpg"; // local image in your project folder
+
+    // Translation function
+    async function translateText(text, targetLang = 'en') {
+      try {
+        // Simple translation using Google Translate API (free tier)
+        const response = await fetch(`https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=${targetLang}&dt=t&q=${encodeURIComponent(text)}`);
+        const data = await response.json();
+        return data[0][0][0] || text;
+      } catch (error) {
+        console.warn('Translation failed:', error);
+        return text; // Return original text if translation fails
+      }
+    }
 
     // Local storage functions
     function getTodayKey() {
@@ -99,7 +114,7 @@ document.addEventListener("DOMContentLoaded", () => {
       
       // If we have existing articles and this is not a refresh, show them immediately
       if (existingArticles.length > 0 && !isRefresh) {
-        renderItems(existingArticles);
+        await renderItems(existingArticles);
         lastUpdated.textContent = `📱 Loaded from cache • ${existingArticles.length} items`;
       }
       
@@ -155,12 +170,12 @@ document.addEventListener("DOMContentLoaded", () => {
   
         let newItems = responses.flat();
         if (!newItems.length) {
-          // If no new items but we have existing ones, show them
-          if (existingArticles.length > 0) {
-            renderItems(existingArticles);
-            lastUpdated.textContent = `No new articles • ${existingArticles.length} cached items`;
-            return;
-          }
+        // If no new items but we have existing ones, show them
+        if (existingArticles.length > 0) {
+          await renderItems(existingArticles);
+          lastUpdated.textContent = `No new articles • ${existingArticles.length} cached items`;
+          return;
+        }
           throw new Error("No items loaded");
         }
   
@@ -188,12 +203,12 @@ document.addEventListener("DOMContentLoaded", () => {
         const newCount = newItems.length;
         const totalCount = finalItems.length;
         lastUpdated.textContent = `🔄 Updated: ${new Date().toLocaleString()} • ${totalCount} items (${newCount} new) • ${duration}s`;
-        renderItems(finalItems);
+        await renderItems(finalItems);
       } catch (err) {
         console.error("Error fetching feeds:", err);
         // If we have cached articles, show them even if fetch failed
         if (existingArticles.length > 0) {
-          renderItems(existingArticles);
+          await renderItems(existingArticles);
           lastUpdated.textContent = `Using cached articles • ${existingArticles.length} items (fetch failed)`;
         } else {
           cards.innerHTML = "<p style='color:#ff6b6b'>❌ Failed to load news.</p>";
@@ -202,7 +217,7 @@ document.addEventListener("DOMContentLoaded", () => {
       }
     }
   
-    function renderItems(items) {
+    async function renderItems(items) {
       if (!items.length) {
         cards.innerHTML = "<p>No news found for today.</p>";
         cards.classList.remove('has-sections');
@@ -224,32 +239,40 @@ document.addEventListener("DOMContentLoaded", () => {
       });
       
   
-      const renderCard = (n) => `
-        <div class="card">
-          ${
-            imagesEnabled
-              ? `<img src="${n.thumbnail}" alt=""
-                 onerror="this.src='${FALLBACK_IMG}'">`
-              : ""
-          }
-          <div class="card-content">
-            <h3><a href="${n.link}" target="_blank" rel="noopener noreferrer">${n.title}</a></h3>
-            <p class="meta">${new Date(n.pubDate).toLocaleString()} — ${
-          n.link ? new URL(n.link).hostname : "Source"
-        }</p>
+      const renderCard = async (n) => {
+        let displayTitle = n.title;
+        if (translationEnabled) {
+          displayTitle = await translateText(n.title);
+        }
+        
+        return `
+          <div class="card">
+            ${
+              imagesEnabled
+                ? `<img src="${n.thumbnail}" alt=""
+                   onerror="this.src='${FALLBACK_IMG}'">`
+                : ""
+            }
+            <div class="card-content">
+              <h3><a href="${n.link}" target="_blank" rel="noopener noreferrer">${displayTitle}</a></h3>
+              <p class="meta">${new Date(n.pubDate).toLocaleString()} — ${
+            n.link ? new URL(n.link).hostname : "Source"
+          }</p>
+            </div>
           </div>
-        </div>
-      `;
+        `;
+      };
   
       let html = '';
       
       // Latest section
       if (latestItems.length > 0) {
+        const latestCards = await Promise.all(latestItems.map(renderCard));
         html += `
           <div class="section">
             <h2 class="section-title">Latest News (Last 3 Hours) <span class="count">(${latestItems.length})</span></h2>
             <div class="articles-grid">
-              ${latestItems.map(renderCard).join('')}
+              ${latestCards.join('')}
             </div>
           </div>
         `;
@@ -257,11 +280,12 @@ document.addEventListener("DOMContentLoaded", () => {
       
       // Earlier Today section
       if (earlierItems.length > 0) {
+        const earlierCards = await Promise.all(earlierItems.map(renderCard));
         html += `
           <div class="section">
             <h2 class="section-title">Earlier Today <span class="count">(${earlierItems.length})</span></h2>
             <div class="articles-grid">
-              ${earlierItems.map(renderCard).join('')}
+              ${earlierCards.join('')}
             </div>
           </div>
         `;
@@ -271,25 +295,40 @@ document.addEventListener("DOMContentLoaded", () => {
       cards.classList.add('has-sections');
     }
   
-    refreshBtn.addEventListener("click", () => {
-      fetchFeedsFor(countrySelect.value, true);
+    refreshBtn.addEventListener("click", async () => {
+      await fetchFeedsFor(countrySelect.value, true);
+    });
+
+    translateBtn.addEventListener("click", async () => {
+      translationEnabled = !translationEnabled;
+      translateBtn.textContent = translationEnabled ? "Original" : "Translate";
+      translateBtn.style.backgroundColor = translationEnabled ? "var(--accent)" : "";
+      translateBtn.style.color = translationEnabled ? "white" : "";
+      
+      // Re-render current articles with new translation state
+      const existingArticles = getStoredArticlesForCountry(countrySelect.value);
+      if (existingArticles.length > 0) {
+        await renderItems(existingArticles);
+      }
     });
   
-    toggleImages.addEventListener("click", () => {
+    toggleImages.addEventListener("click", async () => {
       imagesEnabled = !imagesEnabled;
       toggleImages.textContent = `Images: ${imagesEnabled ? "ON" : "OFF"}`;
-      fetchFeedsFor(countrySelect.value, false);
+      await fetchFeedsFor(countrySelect.value, false);
     });
   
-    countrySelect.addEventListener("change", () => {
+    countrySelect.addEventListener("change", async () => {
       selectedBadge.textContent = countrySelect.options[countrySelect.selectedIndex].text
         .replace("🇭🇺", "")
         .replace("🇸🇮", "")
         .replace("🇭🇷", "")
         .replace("🇧🇦", "");
-      fetchFeedsFor(countrySelect.value, false);
+      await fetchFeedsFor(countrySelect.value, false);
     });
   
     // Initial load
-    fetchFeedsFor(countrySelect.value);
+    (async () => {
+      await fetchFeedsFor(countrySelect.value);
+    })();
   });
