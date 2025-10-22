@@ -3,18 +3,30 @@ document.addEventListener("DOMContentLoaded", () => {
       hungary: [
         "https://index.hu/24ora/rss/",
         "https://telex.hu/rss",
-        "https://444.hu/feed"
+        "https://444.hu/feed",
+        "https://hvg.hu/rss",
+        "https://www.origo.hu/rss"
       ],
       croatia: [
         "https://www.24sata.hr/feeds/news.xml",
-        "https://www.jutarnji.hr/rss"
+        "https://www.jutarnji.hr/rss",
+        "https://www.vecernji.hr/rss",
+        "https://www.nacional.hr/rss",
+        "https://www.net.hr/rss"
       ],
       slovenia: [
         "https://www.rtvslo.si/rss",
-        "https://www.delo.si/rss"
+        "https://www.delo.si/rss",
+        "https://www.sta.si/rss",
+        "https://www.24ur.com/rss",
+        "https://www.siol.net/rss"
       ],
       bosnia: [
-        "https://www.klix.ba/rss"
+        "https://www.klix.ba/rss",
+        "https://www.avaz.ba/rss",
+        "https://www.oslobodjenje.ba/rss",
+        "https://www.dnevni.ba/rss",
+        "https://www.faktor.ba/rss"
       ]
     };
   
