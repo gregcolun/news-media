@@ -34,12 +34,10 @@ document.addEventListener("DOMContentLoaded", () => {
     const cards = document.getElementById("cards");
     const countrySelect = document.getElementById("countrySelect");
     const refreshBtn = document.getElementById("refreshBtn");
-    const toggleImages = document.getElementById("toggleImages");
     const lastUpdated = document.getElementById("lastUpdated");
     const selectedBadge = document.getElementById("selectedBadge");
     const refreshIntervalSelect = document.getElementById("refreshInterval");
   
-    let showImages = true;
     let refreshTimer = null;
   
     async function fetchFeeds(country, forceRefresh = false) {
@@ -50,8 +48,7 @@ document.addEventListener("DOMContentLoaded", () => {
   
       // Cache validity: 1 hour
       if (cache && cacheTime && now - cacheTime < 3600000 && !forceRefresh) {
-        const data = JSON.parse(cache);
-        renderItems(data, true);
+        renderItems(JSON.parse(cache), true);
         return;
       }
   
@@ -59,18 +56,34 @@ document.addEventListener("DOMContentLoaded", () => {
   
       try {
         const urls = FEEDS[country];
-        const allItems = [];
+        let allItems = [];
   
         for (const url of urls) {
-          const response = await fetch(`https://api.rss2json.com/v1/api.json?rss_url=${encodeURIComponent(url)}`);
-          const data = await response.json();
-          if (data.items) allItems.push(...data.items);
+          const proxy = `https://api.allorigins.win/get?url=${encodeURIComponent(url)}`;
+          const res = await fetch(proxy);
+          const data = await res.json();
+          const parser = new DOMParser();
+          const xml = parser.parseFromString(data.contents, "text/xml");
+  
+          const items = Array.from(xml.querySelectorAll("item")).map((it) => ({
+            title: it.querySelector("title")?.textContent || "",
+            link: it.querySelector("link")?.textContent || "",
+            pubDate: it.querySelector("pubDate")?.textContent || "",
+            description: it.querySelector("description")?.textContent || "",
+            thumbnail:
+              it.querySelector("media\\:content, enclosure")?.getAttribute("url") || ""
+          }));
+  
+          allItems.push(...items);
         }
   
-        const sorted = allItems.sort((a, b) => new Date(b.pubDate) - new Date(a.pubDate)).slice(0, 30);
+        // Sort & trim to 30
+        const sorted = allItems
+          .sort((a, b) => new Date(b.pubDate) - new Date(a.pubDate))
+          .slice(0, 30);
+  
         localStorage.setItem(cacheKey, JSON.stringify(sorted));
         localStorage.setItem(`${cacheKey}_time`, now);
-  
         renderItems(sorted);
       } catch (err) {
         console.error("Error fetching feeds:", err);
@@ -84,48 +97,42 @@ document.addEventListener("DOMContentLoaded", () => {
         return;
       }
   
-      cards.innerHTML = items.map(n => `
-        <div class="card">
-          ${showImages ? `<img src="${n.thumbnail || n.enclosure?.link || FALLBACK_IMG}" onerror="this.src='${FALLBACK_IMG}'" alt="">` : ""}
-          <div class="card-content">
-            <h3><a href="${n.link}" target="_blank">${n.title}</a></h3>
-            <p class="meta">${new Date(n.pubDate).toLocaleString()} — ${new URL(n.link).hostname}</p>
+      cards.innerHTML = items
+        .map(
+          (n) => `
+          <div class="card">
+            <img src="${n.thumbnail || FALLBACK_IMG}" onerror="this.src='${FALLBACK_IMG}'" alt="">
+            <div class="card-content">
+              <h3><a href="${n.link}" target="_blank">${n.title}</a></h3>
+              <p class="meta">${new Date(n.pubDate).toLocaleString()} — ${new URL(n.link).hostname}</p>
+            </div>
           </div>
-        </div>
-      `).join("");
+        `
+        )
+        .join("");
   
       lastUpdated.textContent = `Loaded ${fromCache ? "from cache" : "live"} • ${new Date().toLocaleTimeString()}`;
-  
-      // Retrigger translation
-      if (window.google && window.google.translate && window.google.translate.TranslateElement) {
-        const event = new Event("DOMContentLoaded");
-        document.dispatchEvent(event);
-      }
     }
   
-    // UI controls
-    refreshBtn.addEventListener("click", () => {
-      fetchFeeds(countrySelect.value, true);
-    });
-  
-    toggleImages.addEventListener("click", () => {
-      showImages = !showImages;
-      toggleImages.textContent = `Images: ${showImages ? "ON" : "OFF"}`;
-      fetchFeeds(countrySelect.value, true);
-    });
-  
+    // Controls
+    refreshBtn.addEventListener("click", () => fetchFeeds(countrySelect.value, true));
     countrySelect.addEventListener("change", () => {
       selectedBadge.textContent = countrySelect.options[countrySelect.selectedIndex].text;
       fetchFeeds(countrySelect.value, true);
     });
-  
     refreshIntervalSelect.addEventListener("change", () => {
       if (refreshTimer) clearInterval(refreshTimer);
-      refreshTimer = setInterval(() => fetchFeeds(countrySelect.value, true), Number(refreshIntervalSelect.value));
+      refreshTimer = setInterval(
+        () => fetchFeeds(countrySelect.value, true),
+        Number(refreshIntervalSelect.value)
+      );
     });
   
-    // Initial setup
+    // Initial
     fetchFeeds(countrySelect.value);
-    refreshTimer = setInterval(() => fetchFeeds(countrySelect.value, true), Number(refreshIntervalSelect.value));
+    refreshTimer = setInterval(
+      () => fetchFeeds(countrySelect.value, true),
+      Number(refreshIntervalSelect.value)
+    );
   });
   
