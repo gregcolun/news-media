@@ -185,6 +185,24 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   }
 
+  // Function to ensure we only have current day data
+  function ensureCurrentDayData() {
+    const today = new Date().toDateString();
+    const keys = Object.keys(localStorage);
+    let cleaned = false;
+    
+    keys.forEach(key => {
+      if (key.startsWith('news_') && key !== `news_${today}`) {
+        localStorage.removeItem(key);
+        cleaned = true;
+      }
+    });
+    
+    if (cleaned) {
+      console.log('Cleaned old news data from previous days');
+    }
+  }
+
   function mergeArticles(existing, newArticles) {
     const existingMap = new Map();
     existing.forEach(article => {
@@ -278,20 +296,30 @@ document.addEventListener("DOMContentLoaded", () => {
 
       newItems.sort((a, b) => new Date(b.pubDate) - new Date(a.pubDate));
 
-      // Keep last 24h for new items
+      // Keep only articles from current day (midnight to midnight)
       const now = new Date();
+      const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+      const endOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
+      
       newItems = newItems
         .filter((it) => {
           const d = new Date(it.pubDate);
-          return now - d < 86400000;
+          return d >= startOfDay && d < endOfDay;
         });
 
       // Merge with existing articles
       const allItems = mergeArticles(existingArticles, newItems);
       allItems.sort((a, b) => new Date(b.pubDate) - new Date(a.pubDate));
       
-      // Keep all articles from today (no limit)
-      const finalItems = allItems;
+      // Filter all articles to only show current day
+      const currentTime = new Date();
+      const dayStart = new Date(currentTime.getFullYear(), currentTime.getMonth(), currentTime.getDate());
+      const dayEnd = new Date(currentTime.getFullYear(), currentTime.getMonth(), currentTime.getDate() + 1);
+      
+      const finalItems = allItems.filter((it) => {
+        const d = new Date(it.pubDate);
+        return d >= dayStart && d < dayEnd;
+      });
       
       // Save to localStorage
       saveArticles(country, finalItems);
@@ -321,16 +349,31 @@ document.addEventListener("DOMContentLoaded", () => {
       return;
     }
 
-    // Split articles into "Latest" and "Earlier Today" based on time
-    const now = new Date();
-    const threeHoursAgo = new Date(now.getTime() - (3 * 60 * 60 * 1000)); // 3 hours ago
+    // Filter items to only show current day articles
+    const renderTime = new Date();
+    const renderDayStart = new Date(renderTime.getFullYear(), renderTime.getMonth(), renderTime.getDate());
+    const renderDayEnd = new Date(renderTime.getFullYear(), renderTime.getMonth(), renderTime.getDate() + 1);
     
-    const latestItems = items.filter(item => {
+    const currentDayItems = items.filter(item => {
+      const itemDate = new Date(item.pubDate);
+      return itemDate >= renderDayStart && itemDate < renderDayEnd;
+    });
+
+    if (!currentDayItems.length) {
+      cards.innerHTML = "<p>No news found for today.</p>";
+      cards.classList.remove('has-sections');
+      return;
+    }
+
+    // Split articles into "Latest" and "Earlier Today" based on time
+    const threeHoursAgo = new Date(renderTime.getTime() - (3 * 60 * 60 * 1000)); // 3 hours ago
+    
+    const latestItems = currentDayItems.filter(item => {
       const itemDate = new Date(item.pubDate);
       return itemDate >= threeHoursAgo;
     });
     
-    const earlierItems = items.filter(item => {
+    const earlierItems = currentDayItems.filter(item => {
       const itemDate = new Date(item.pubDate);
       return itemDate < threeHoursAgo;
     });
@@ -463,6 +506,8 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // Initial load
   (async () => {
+    // Clean old data first
+    ensureCurrentDayData();
     await fetchFeedsFor(countrySelect.value);
     // Start auto-refresh after initial load
     startAutoRefresh();
