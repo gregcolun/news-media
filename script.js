@@ -111,6 +111,34 @@ document.addEventListener("DOMContentLoaded", () => {
     }, 1000);
   }
 
+  // Timezone conversion function
+  function formatLocalTime(pubDateString) {
+    try {
+      // Parse the date string (RSS feeds often use RFC 2822 format)
+      const date = new Date(pubDateString);
+      
+      // Check if the date is valid
+      if (isNaN(date.getTime())) {
+        return pubDateString; // Return original if parsing fails
+      }
+      
+      // Convert to local timezone and format
+      return date.toLocaleString('en-US', {
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: true,
+        timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone
+      });
+    } catch (error) {
+      console.warn('Date parsing failed:', error);
+      return pubDateString; // Return original if conversion fails
+    }
+  }
+
   // Translation function
   async function translateText(text, targetLang = 'en') {
     try {
@@ -184,7 +212,7 @@ document.addEventListener("DOMContentLoaded", () => {
     // If we have existing articles and this is not a refresh, show them immediately
     if (existingArticles.length > 0 && !isRefresh) {
       await renderItems(existingArticles);
-      lastUpdated.textContent = `📱 Loaded from cache • ${existingArticles.length} items`;
+        lastUpdated.textContent = `📱 Cache: ${existingArticles.length} items`;
     }
     
     cards.innerHTML = '<div class="small">⏳ Fetching latest news...</div>';
@@ -242,7 +270,7 @@ document.addEventListener("DOMContentLoaded", () => {
       // If no new items but we have existing ones, show them
       if (existingArticles.length > 0) {
         await renderItems(existingArticles);
-        lastUpdated.textContent = `No new articles • ${existingArticles.length} cached items`;
+        lastUpdated.textContent = `No new articles • ${existingArticles.length} cached`;
         return;
       }
         throw new Error("No items loaded");
@@ -271,14 +299,14 @@ document.addEventListener("DOMContentLoaded", () => {
       const duration = ((Date.now() - start) / 1000).toFixed(1);
       const newCount = newItems.length;
       const totalCount = finalItems.length;
-      lastUpdated.textContent = `🔄 Updated: ${new Date().toLocaleString()} • ${totalCount} items (${newCount} new) • ${duration}s`;
+        lastUpdated.textContent = `🔄 ${totalCount} items (${newCount} new) • ${duration}s`;
       await renderItems(finalItems);
     } catch (err) {
       console.error("Error fetching feeds:", err);
       // If we have cached articles, show them even if fetch failed
       if (existingArticles.length > 0) {
         await renderItems(existingArticles);
-        lastUpdated.textContent = `Using cached articles • ${existingArticles.length} items (fetch failed)`;
+        lastUpdated.textContent = `Using cached • ${existingArticles.length} items (failed)`;
       } else {
         cards.innerHTML = "<p style='color:#ff6b6b'>❌ Failed to load news.</p>";
         cards.classList.remove('has-sections');
@@ -324,9 +352,9 @@ document.addEventListener("DOMContentLoaded", () => {
           }
           <div class="card-content">
             <h3><a href="${n.link}" target="_blank" rel="noopener noreferrer">${displayTitle}</a></h3>
-            <p class="meta">${new Date(n.pubDate).toLocaleString()} — ${
-          n.link ? new URL(n.link).hostname : "Source"
-        }</p>
+            <p class="meta">${formatLocalTime(n.pubDate)} — ${
+           n.link ? new URL(n.link).hostname : "Source"
+         }</p>
           </div>
         </div>
       `;
@@ -371,6 +399,19 @@ document.addEventListener("DOMContentLoaded", () => {
     // Restart auto-refresh after manual refresh
     startAutoRefresh();
   });
+
+  // Make CE logo clickable for refresh
+  const ceLogo = document.getElementById('ceLogo');
+  if (ceLogo) {
+    console.log('CE Logo found, adding click listener');
+    ceLogo.addEventListener("click", async () => {
+      console.log('CE Logo clicked! Refreshing...');
+      await fetchFeedsFor(countrySelect.value, true);
+      startAutoRefresh();
+    });
+  } else {
+    console.log('CE Logo not found!');
+  }
 
   // Double-click to pause/resume auto-refresh
   refreshBtn.addEventListener("dblclick", () => {

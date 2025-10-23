@@ -13,7 +13,7 @@
   <div class="wrap">
     <header>
       <div class="brand">
-        <div class="logo">CE</div>
+        <div class="logo" id="ceLogo" title="Click to refresh">CE</div>
         <div>
           <h1>Central Europe — Live News</h1>
         </div>
@@ -38,13 +38,13 @@
 
     <div class="grid">
       <main class="feed" id="feed">
-        <div style="display:flex;justify-content:space-between;align-items:center">
-          <div style="display:flex;gap:10px;align-items:center">
+        <div class="status-bar">
+          <div class="status-left">
             <div class="badge" id="selectedBadge">Hungary</div>
             <div class="small" id="lastUpdated">—</div>
             <div class="small" id="autoRefreshStatus" style="color:var(--accent);font-weight:600;">🔄 Auto-refresh active</div>
           </div>
-          <div id="status" style="display:flex;gap:10px;align-items:center"></div>
+          <div class="status-right" id="status"></div>
         </div>
 
         <div style="margin-top:16px">
