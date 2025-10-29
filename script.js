@@ -430,6 +430,65 @@ document.addEventListener("DOMContentLoaded", () => {
       `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`
     ];
 
+    // 0) FAST PATH: use paginated RSS feed to collect all same-day items
+    async function fetchPoliticoFeedItemsPaged() {
+      const today = new Date();
+      const startOfDay = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+      const endOfDay = new Date(today.getFullYear(), today.getMonth(), today.getDate() + 1);
+      const results = [];
+      const MAX_FEED_PAGES = 10;
+      for (let page = 1; page <= MAX_FEED_PAGES; page++) {
+        const feedUrl = page === 1 ? 'https://www.politico.eu/feed/' : `https://www.politico.eu/feed/?paged=${page}`;
+        const proxiesLocal = [
+          `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(feedUrl)}`,
+          `https://corsproxy.io/?${encodeURIComponent(feedUrl)}`,
+          `https://api.allorigins.win/raw?url=${encodeURIComponent(feedUrl)}`
+        ];
+        let xmlText = null;
+        for (const p of proxiesLocal) {
+          try {
+            const r = await fetch(p);
+            if (r.ok) {
+              const t = await r.text();
+              if (t && t.trim().startsWith('<')) { xmlText = t; break; }
+            }
+          } catch {}
+        }
+        if (!xmlText) break;
+        const parserLocal = new DOMParser();
+        const xml = parserLocal.parseFromString(xmlText, 'text/xml');
+        const pageItems = Array.from(xml.querySelectorAll('item')).map(it => {
+          const title = it.querySelector('title')?.textContent?.trim() || '';
+          const link = it.querySelector('link')?.textContent?.trim() || '';
+          const pubDate = it.querySelector('pubDate, dc\\:date, updated, published')?.textContent?.trim() || '';
+          const media = it.querySelector('media\\:content, enclosure, media\\:thumbnail');
+          let image = media?.getAttribute('url') || '';
+          if (!image) {
+            const desc = it.querySelector('description')?.textContent || '';
+            const m = desc.match(/<img[^>]+src=\"([^\">]+)\"/);
+            if (m) image = m[1];
+          }
+          return { title, link, pubDate, thumbnail: image || FALLBACK_IMG };
+        });
+        // Stop if feed page is empty
+        if (!pageItems.length) break;
+        // Partition into today vs older
+        let sawOlder = false;
+        for (const it of pageItems) {
+          const d = new Date(it.pubDate);
+          if (!isNaN(d.getTime()) && d >= startOfDay && d < endOfDay) {
+            results.push(it);
+          } else if (d < startOfDay) {
+            sawOlder = true;
+          }
+        }
+        // If this feed page already contains older-than-today, subsequent pages will be older only
+        if (sawOlder) break;
+      }
+      results.sort((a,b) => new Date(b.pubDate) - new Date(a.pubDate));
+      return results;
+    }
+
     let htmlText = null;
     for (const proxy of proxies) {
       try {
@@ -448,10 +507,18 @@ document.addEventListener("DOMContentLoaded", () => {
 
     if (!htmlText) throw new Error('No HTML from Politico');
 
+    // 1) Use paginated RSS to get full day coverage quickly
+    try {
+      const feedToday = await fetchPoliticoFeedItemsPaged();
+      if (feedToday.length > 0) {
+        return feedToday;
+      }
+    } catch {}
+
     const parser = new DOMParser();
     const doc = parser.parseFromString(htmlText, 'text/html');
 
-    // Helper to fetch via proxies (reused below)
+    // Helper to fetch via proxies (reused below) — HTML fallback
     async function fetchViaProxies(pageUrl) {
       const proxiesLocal = [
         `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(pageUrl)}`,
@@ -472,10 +539,12 @@ document.addEventListener("DOMContentLoaded", () => {
       throw new Error('all proxies failed');
     }
 
-    async function collectPageLinks(documentNode) {
+    async function collectPageLinks(documentNode, currentPageIndex, baseUrl) {
       const scope = documentNode.querySelector('main') || documentNode;
       const anchors = Array.from(scope.querySelectorAll('h1 a[href], h2 a[href], h3 a[href], h4 a[href], a[href*="/article/"], a[href*="/news/"]'));
       const links = [];
+      let numOld = 0;
+      let numRel = 0;
       for (const a of anchors) {
         const href = a.getAttribute('href') || '';
         if (!href) continue;
@@ -489,13 +558,18 @@ document.addEventListener("DOMContentLoaded", () => {
         if (/\bfilters?\b/i.test(abs)) continue;
         const title = (a.textContent || '').trim();
         if (!title || title.length < 6 || /^filters$/i.test(title)) continue;
-        // Try to capture relative label from nearby text to know if it's today
+        // Try to capture relative label from the date element (faster decision: today vs old)
         const container = a.closest('article, li, div') || a.parentElement;
         let relText = '';
         if (container) {
-          const tnode = container.querySelector('time') || container;
-          relText = (tnode.textContent || '').trim();
+          const timeNode = container.querySelector('.date-time__time') || container.querySelector('time') || container;
+          relText = (timeNode.textContent || '').trim();
         }
+        const upper = relText.toUpperCase();
+        const isRelative = /(\d+)\s*(HRS?|MINS?)\s*AGO|JUST NOW/.test(upper);
+        const isAbsoluteDate = /(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)\s+\d{1,2}/.test(upper);
+        if (isRelative) numRel += 1;
+        if (isAbsoluteDate && !isRelative) numOld += 1;
         links.push({ href: abs, title, anchor: a, relText });
       }
       // Try to discover next page link
@@ -507,7 +581,12 @@ document.addEventListener("DOMContentLoaded", () => {
         if (more) next = more.getAttribute('href');
       }
       if (next && !next.startsWith('http')) next = new URL(next, 'https://www.politico.eu').toString();
-      return { links, next };
+      // Fallback to classic WordPress pagination /latest/page/{n}/
+      if (!next && typeof currentPageIndex === 'number' && baseUrl) {
+        const pageNum = currentPageIndex + 2; // next page (1-indexed pages)
+        next = new URL(`page/${pageNum}/`, baseUrl).toString();
+      }
+      return { links, next, numRel, numOld };
     }
 
     // Crawl up to N pages to gather all current-day links
@@ -518,21 +597,67 @@ document.addEventListener("DOMContentLoaded", () => {
     let depth = 0;
     const MAX_PAGES = 20; // crawl deeper to capture full current day
     while (depth < MAX_PAGES) {
-      const { links, next } = await collectPageLinks(currentDoc);
+      const { links, next } = await collectPageLinks(currentDoc, depth, url);
       for (const { href, title, anchor } of links) {
         if (!seenLinks.has(href)) {
           seenLinks.add(href);
           collected.push({ href, title, anchor });
         }
       }
+      // Stop if no next or no new links were found
+      if (links.length === 0) break;
       if (!next) break;
+      // Try multiple next-page URL forms in case /page/N/ is blocked
+      const candidates = [next];
       try {
-        currentHtml = await fetchViaProxies(next);
-        currentDoc = parser.parseFromString(currentHtml, 'text/html');
-      } catch (e) {
-        break;
+        const urlObj = new URL(next);
+        if (!/page\//.test(urlObj.pathname)) {
+          const alt = new URL(`page/${depth + 2}/`, urlObj.origin + urlObj.pathname);
+          candidates.push(alt.toString());
+        }
+        const qp = new URL(next);
+        qp.searchParams.set('page', String(depth + 2));
+        candidates.push(qp.toString());
+        const qp2 = new URL(next);
+        qp2.searchParams.set('paged', String(depth + 2));
+        candidates.push(qp2.toString());
+      } catch {}
+
+      let fetched = false;
+      for (const cand of candidates) {
+        try {
+          const html = await fetchViaProxies(cand);
+          if (html && html.length > 5000) {
+            currentHtml = html;
+            currentDoc = parser.parseFromString(currentHtml, 'text/html');
+            fetched = true;
+            break;
+          }
+        } catch {}
       }
+      if (!fetched) break;
       depth += 1;
+    }
+
+    // Defensive: explicitly try classic paged URLs 2..N to ensure we don't stop at the button
+    if (collected.length > 0) {
+      for (let pageNum = 2; pageNum <= MAX_PAGES + 1; pageNum++) {
+        let html = null;
+        try {
+          const pagedUrl = new URL(`page/${pageNum}/`, url).toString();
+          html = await fetchViaProxies(pagedUrl);
+        } catch {}
+        if (!html) break;
+        const docN = parser.parseFromString(html, 'text/html');
+        const { links: linksN } = await collectPageLinks(docN, pageNum - 1, url);
+        for (const { href, title, anchor } of linksN) {
+          if (!seenLinks.has(href)) {
+            seenLinks.add(href);
+            collected.push({ href, title, anchor });
+          }
+        }
+        if (linksN.length === 0) break;
+      }
     }
 
     // Build initial result objects from collected links and attempt list-page image/time extraction
@@ -614,6 +739,20 @@ document.addEventListener("DOMContentLoaded", () => {
         }
       }
       const thumbnail = img || FALLBACK_IMG;
+
+      // Time: prefer list-page relative label first for speed
+      if (entry.relText) {
+        const rel = entry.relText.toUpperCase();
+        const m = rel.match(/(\d+)\s*MINS?\s*AGO/);
+        const h = rel.match(/(\d+)\s*HRS?\s*AGO/);
+        if (m || h || /JUST NOW/.test(rel)) {
+          const delta = (h ? parseInt(h[1], 10) * 60 : 0) + (m ? parseInt(m[1], 10) : 0);
+          pubDate = new Date(now - delta * 60 * 1000).toISOString();
+        } else if (/(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)\s+\d{1,2}/.test(rel)) {
+          // Not today, skip early
+          continue;
+        }
+      }
 
       // Time: prefer machine-readable time tag
       let pubDate = null;
@@ -777,6 +916,7 @@ document.addEventListener("DOMContentLoaded", () => {
     // Enrich items in parallel (cap to avoid overload but high enough for a full day)
     const ENRICH_LIMIT = 120;
     const enrichTargets = results.slice(0, ENRICH_LIMIT);
+    // Enrich all to normalize times accurately
     await Promise.all(enrichTargets.map(enrichItem));
 
     // Keep only current day and sort by time desc; break ties deterministically
