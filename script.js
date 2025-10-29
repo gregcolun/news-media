@@ -23,12 +23,20 @@ document.addEventListener("DOMContentLoaded", () => {
     ],
     moldova: [
       // Preferred sources
-      "https://www.jurnal.md/ro/rss",
+      "https://jurnaltv.md/rss",
       "https://tv8.md/rss",
       "https://stiri.md/rss",
-      // Keep two reliable fallbacks to maintain 5 feeds
+      // Additional strong sources for fuller coverage
       "https://unimedia.info/rss/",
-      "https://www.ipn.md/en/rss"
+      "https://www.ipn.md/en/rss",
+      "https://deschide.md/rss.xml",
+      "https://newsmaker.md/rss/",
+      "https://agora.md/rss",
+      "https://noi.md/rss",
+      "https://point.md/ro/rss",
+      "https://point.md/ru/rss",
+      "https://www.zdg.md/feed/",
+      "http://rss.publika.md/rss/?lang=ro"
     ],
     bosnia: [
       "https://www.klix.ba/rss",
@@ -320,17 +328,33 @@ document.addEventListener("DOMContentLoaded", () => {
           const parser = new DOMParser();
           const xml = parser.parseFromString(xmlText, "text/xml");
 
-          return Array.from(xml.querySelectorAll("item")).map((it) => {
+          const nodes = xml.querySelectorAll("item, entry");
+          return Array.from(nodes).map((it) => {
             const desc = it.querySelector("description")?.textContent || "";
-            const imgMatch = desc.match(/<img[^>]+src="([^">]+)"/);
+            const imgMatch = desc.match(/<img[^>]+src=\"([^\">]+)\"/);
             const image =
-              it.querySelector("media\\:content, enclosure")?.getAttribute("url") ||
+              it.querySelector("media\\:content, media\\:thumbnail, enclosure, thumbnail")?.getAttribute("url") ||
               (imgMatch ? imgMatch[1] : FALLBACK_IMG);
+
+            let dateText = (
+              it.querySelector("pubDate, updated, published, dc\\:date, date")?.textContent || ""
+            ).trim();
+            if (!dateText) {
+              const t = it.querySelector("time[datetime]")?.getAttribute("datetime") || "";
+              if (t) dateText = t;
+            }
+            const pubDate = dateText || "";
+
+            let link = it.querySelector("link")?.textContent?.trim() || "";
+            if (!link) {
+              const linkEl = it.querySelector("link[href][rel='alternate']") || it.querySelector("link[href]");
+              if (linkEl) link = linkEl.getAttribute("href") || "";
+            }
 
             return {
               title: it.querySelector("title")?.textContent?.trim() || "",
-              link: it.querySelector("link")?.textContent?.trim() || "",
-              pubDate: it.querySelector("pubDate")?.textContent?.trim() || "",
+              link,
+              pubDate,
               thumbnail: image
             };
           });
@@ -358,6 +382,8 @@ document.addEventListener("DOMContentLoaded", () => {
       newItems = newItems
         .filter((it) => {
           const d = new Date(it.pubDate);
+          // If date is invalid or missing, assume it's today to avoid dropping fresh items from sources with nonstandard dates
+          if (isNaN(d.getTime())) return true;
           return d >= startOfDay && d < endOfDay;
         });
 
@@ -425,10 +451,94 @@ document.addEventListener("DOMContentLoaded", () => {
     const parser = new DOMParser();
     const doc = parser.parseFromString(htmlText, 'text/html');
 
-    const scope = doc.querySelector('main') || doc;
+    // Helper to fetch via proxies (reused below)
+    async function fetchViaProxies(pageUrl) {
+      const proxiesLocal = [
+        `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(pageUrl)}`,
+        `https://corsproxy.io/?${encodeURIComponent(pageUrl)}`,
+        `https://api.allorigins.win/raw?url=${encodeURIComponent(pageUrl)}`
+      ];
+      for (const p of proxiesLocal) {
+        try {
+          const r = await fetch(p);
+          if (r.ok) {
+            const t = await r.text();
+            if (t && t.length > 200) return t;
+          }
+        } catch (e) {
+          // continue trying next proxy
+        }
+      }
+      throw new Error('all proxies failed');
+    }
 
-    // Collect likely article links under main content
-    const titleAnchors = Array.from(scope.querySelectorAll('h2 a[href], h3 a[href], h4 a[href], a[href*="/article/"], a[href*="/news/"]'));
+    async function collectPageLinks(documentNode) {
+      const scope = documentNode.querySelector('main') || documentNode;
+      const anchors = Array.from(scope.querySelectorAll('h1 a[href], h2 a[href], h3 a[href], h4 a[href], a[href*="/article/"], a[href*="/news/"]'));
+      const links = [];
+      for (const a of anchors) {
+        const href = a.getAttribute('href') || '';
+        if (!href) continue;
+        if (href.startsWith('#')) continue;
+        const abs = href.startsWith('http') ? href : new URL(href, 'https://www.politico.eu').toString();
+        const u = new URL(abs);
+        // allow both politico.eu and politico.com
+        if (!/\.politico\.(eu|com)$/i.test(u.hostname)) continue;
+        // skip pro subdomain on EU
+        if (u.hostname.toLowerCase().startsWith('pro.')) continue;
+        if (/\bfilters?\b/i.test(abs)) continue;
+        const title = (a.textContent || '').trim();
+        if (!title || title.length < 6 || /^filters$/i.test(title)) continue;
+        // Try to capture relative label from nearby text to know if it's today
+        const container = a.closest('article, li, div') || a.parentElement;
+        let relText = '';
+        if (container) {
+          const tnode = container.querySelector('time') || container;
+          relText = (tnode.textContent || '').trim();
+        }
+        links.push({ href: abs, title, anchor: a, relText });
+      }
+      // Try to discover next page link
+      let next = null;
+      const nextRel = documentNode.querySelector('link[rel="next"]');
+      if (nextRel) next = nextRel.getAttribute('href');
+      if (!next) {
+        const more = Array.from(scope.querySelectorAll('a')).find(a => /load\s*more|more\s*results/i.test(a.textContent || ''));
+        if (more) next = more.getAttribute('href');
+      }
+      if (next && !next.startsWith('http')) next = new URL(next, 'https://www.politico.eu').toString();
+      return { links, next };
+    }
+
+    // Crawl up to N pages to gather all current-day links
+    const seenLinks = new Set();
+    const collected = [];
+    let currentHtml = htmlText;
+    let currentDoc = doc;
+    let depth = 0;
+    const MAX_PAGES = 20; // crawl deeper to capture full current day
+    while (depth < MAX_PAGES) {
+      const { links, next } = await collectPageLinks(currentDoc);
+      for (const { href, title, anchor } of links) {
+        if (!seenLinks.has(href)) {
+          seenLinks.add(href);
+          collected.push({ href, title, anchor });
+        }
+      }
+      if (!next) break;
+      try {
+        currentHtml = await fetchViaProxies(next);
+        currentDoc = parser.parseFromString(currentHtml, 'text/html');
+      } catch (e) {
+        break;
+      }
+      depth += 1;
+    }
+
+    // Build initial result objects from collected links and attempt list-page image/time extraction
+    const scope = doc.querySelector('main') || doc;
+    // Build results from collected link entries
+    const titleAnchors = [];
 
     const seen = new Map();
     const now = Date.now();
@@ -451,7 +561,8 @@ document.addEventListener("DOMContentLoaded", () => {
       return minutes > 0 ? minutes : (text.includes('MIN AGO') || text.includes('HR AGO') ? minutes : null);
     }
 
-    for (const a of titleAnchors) {
+    for (const entry of collected) {
+      const a = entry.anchor;
       let href = a.getAttribute('href') || '';
       if (!href) continue;
       if (href.startsWith('#')) continue;
@@ -524,6 +635,20 @@ document.addEventListener("DOMContentLoaded", () => {
         } else {
           const delta = extractRelativeDelta(container);
           if (delta != null) minutesAgo = delta; // in minutes
+        }
+      }
+
+      // If still no relative from DOM, try the captured relText for this link
+      if (minutesAgo == null && hoursAgo == null && entry.relText) {
+        const rel = entry.relText.toUpperCase();
+        const m = rel.match(/(\d+)\s*MINS?\s*AGO/);
+        const h = rel.match(/(\d+)\s*HRS?\s*AGO/);
+        if (m) minutesAgo = parseInt(m[1], 10);
+        if (h) hoursAgo = parseInt(h[1], 10);
+        // If label looks like a date (e.g., OCT 28), we can skip early (not today)
+        if (!m && !h && /(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)\s+\d{1,2}/.test(rel)) {
+          // don't add this one; it's previous day
+          continue;
         }
       }
 
@@ -604,6 +729,23 @@ document.addEventListener("DOMContentLoaded", () => {
           if (timeEl) pub = timeEl.getAttribute('datetime');
         }
         if (!pub) {
+          // Try JSON-LD
+          const ldNodes = Array.from(page.querySelectorAll('script[type="application/ld+json"]'));
+          for (const s of ldNodes) {
+            try {
+              const json = JSON.parse(s.textContent || '{}');
+              const arr = Array.isArray(json) ? json : [json];
+              for (const obj of arr) {
+                if (obj && (obj.datePublished || (obj.article && obj.article.datePublished))) {
+                  pub = obj.datePublished || (obj.article && obj.article.datePublished);
+                  break;
+                }
+              }
+              if (pub) break;
+            } catch (e) {}
+          }
+        }
+        if (!pub) {
           const dateText = page.querySelector('.date-time__date')?.textContent?.trim() || '';
           const timeText = page.querySelector('.date-time__time')?.textContent?.trim() || '';
           if (dateText && timeText) pub = new Date(`${dateText} ${timeText}`).toISOString();
@@ -632,15 +774,16 @@ document.addEventListener("DOMContentLoaded", () => {
       }
     }
 
-    // Enrich items in parallel (limit to first 40 for performance)
-    const slice = results.slice(0, 40);
-    await Promise.all(slice.map(enrichItem));
+    // Enrich items in parallel (cap to avoid overload but high enough for a full day)
+    const ENRICH_LIMIT = 120;
+    const enrichTargets = results.slice(0, ENRICH_LIMIT);
+    await Promise.all(enrichTargets.map(enrichItem));
 
     // Keep only current day and sort by time desc; break ties deterministically
     const today = new Date();
     const startOfDay = new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime();
     const endOfDay = new Date(today.getFullYear(), today.getMonth(), today.getDate() + 1).getTime();
-    const filtered = slice.filter(it => {
+    const filtered = enrichTargets.filter(it => {
       const t = new Date(it.pubDate).getTime();
       return !isNaN(t) && t >= startOfDay && t < endOfDay;
     });
