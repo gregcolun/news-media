@@ -249,7 +249,8 @@ document.addEventListener("DOMContentLoaded", () => {
       cards.innerHTML = '<div class="small">\u23f3 Fetching latest news...</div>';
       const start = Date.now();
       try {
-        const politicoItems = await fetchPoliticoLatest();
+        // Fast path: fetch without image enrichment, render immediately
+        const politicoItems = await fetchPoliticoLatest(false);
 
         // Keep only articles from current day
         const now = new Date();
@@ -268,6 +269,21 @@ document.addEventListener("DOMContentLoaded", () => {
         const duration = ((Date.now() - start) / 1000).toFixed(1);
         lastUpdated.textContent = `\ud83d\udd04 ${allItems.length} items (${todayItems.length} new) • ${duration}s`;
         await renderItems(allItems);
+
+        // Background image enrichment to improve thumbnails without delaying UI
+        ;(async () => {
+          try {
+            const enriched = await fetchPoliticoLatest(true);
+            const enrichedToday = enriched.filter((it) => {
+              const d = new Date(it.pubDate);
+              return d >= startOfDay && d < endOfDay;
+            });
+            const merged = mergeArticles(allItems, enrichedToday)
+              .sort((a, b) => new Date(b.pubDate) - new Date(a.pubDate));
+            saveArticles(country, merged);
+            await renderItems(merged);
+          } catch {}
+        })();
       } catch (e) {
         console.error('Error fetching Politico:', e);
         if (existingArticles.length > 0) {
@@ -312,7 +328,8 @@ document.addEventListener("DOMContentLoaded", () => {
           let xmlText = null;
           try {
             const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), 7000);
+            const timeoutMs = country === 'moldova' ? 4000 : 7000;
+            const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
             const text = await Promise.any(
               proxies.map(p => fetch(p, { signal: controller.signal }).then(r => r.ok ? r.text() : Promise.reject()))
             );
@@ -426,7 +443,7 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 
-  async function fetchPoliticoLatest() {
+  async function fetchPoliticoLatest(enrichImages = true) {
     const url = 'https://www.politico.eu/latest/';
     const proxies = [
       `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(url)}`,
@@ -558,7 +575,9 @@ document.addEventListener("DOMContentLoaded", () => {
     try {
       const feedToday = await fetchPoliticoFeedItemsPaged();
       if (feedToday.length > 0) {
-        await enrichMissingImages(feedToday, 12);
+        if (enrichImages) {
+          await enrichMissingImages(feedToday, 12);
+        }
         return feedToday;
       }
     } catch {}
