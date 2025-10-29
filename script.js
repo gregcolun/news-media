@@ -281,7 +281,7 @@ document.addEventListener("DOMContentLoaded", () => {
       return;
     }
 
-    const urls = FEEDS[country] || [];
+    const urls = (FEEDS[country] || []).slice(0, 5);
     
     // Clear old articles from previous days
     clearOldArticles();
@@ -308,19 +308,16 @@ document.addEventListener("DOMContentLoaded", () => {
           ];
 
           let xmlText = null;
-          for (const proxy of proxies) {
-            try {
-              const res = await fetch(proxy);
-              if (res.ok) {
-                const text = await res.text();
-                if (text.trim().startsWith("<")) {
-                  xmlText = text;
-                  break;
-                }
-              }
-            } catch (e) {
-              console.warn("Proxy failed:", proxy);
-            }
+          try {
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 7000);
+            const text = await Promise.any(
+              proxies.map(p => fetch(p, { signal: controller.signal }).then(r => r.ok ? r.text() : Promise.reject()))
+            );
+            clearTimeout(timeoutId);
+            if (text && text.trim().startsWith('<')) xmlText = text;
+          } catch (e) {
+            // no xmlText; return [] below
           }
 
           if (!xmlText) return [];
@@ -436,7 +433,8 @@ document.addEventListener("DOMContentLoaded", () => {
       const startOfDay = new Date(today.getFullYear(), today.getMonth(), today.getDate());
       const endOfDay = new Date(today.getFullYear(), today.getMonth(), today.getDate() + 1);
       const results = [];
-      const MAX_FEED_PAGES = 10;
+      const MAX_FEED_PAGES = 4; // keep fast
+      const MAX_ITEMS = 60;
       for (let page = 1; page <= MAX_FEED_PAGES; page++) {
         const feedUrl = page === 1 ? 'https://www.politico.eu/feed/' : `https://www.politico.eu/feed/?paged=${page}`;
         const proxiesLocal = [
@@ -484,9 +482,51 @@ document.addEventListener("DOMContentLoaded", () => {
         }
         // If this feed page already contains older-than-today, subsequent pages will be older only
         if (sawOlder) break;
+        if (results.length >= MAX_ITEMS) break;
       }
       results.sort((a,b) => new Date(b.pubDate) - new Date(a.pubDate));
       return results;
+    }
+
+    // Enrich thumbnails only for items that still use fallback; keep limit small for speed
+    async function enrichMissingImages(items, maxToEnrich = 6) {
+      const targets = items.filter(it => !it.thumbnail || it.thumbnail === FALLBACK_IMG).slice(0, maxToEnrich);
+      if (!targets.length) return items;
+
+      const proxiesLocal = (u) => [
+        `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(u)}`,
+        `https://corsproxy.io/?${encodeURIComponent(u)}`,
+        `https://api.allorigins.win/raw?url=${encodeURIComponent(u)}`
+      ];
+
+      await Promise.all(targets.map(async (it) => {
+        try {
+          let html = null;
+          for (const p of proxiesLocal(it.link)) {
+            try {
+              const r = await fetch(p);
+              if (r.ok) {
+                const t = await r.text();
+                if (t && t.length > 500) { html = t; break; }
+              }
+            } catch {}
+          }
+          if (!html) return;
+          const parserLocal = new DOMParser();
+          const doc = parserLocal.parseFromString(html, 'text/html');
+          const og = doc.querySelector('meta[property="og:image"], meta[name="og:image"], meta[name="twitter:image"], meta[property="twitter:image"]');
+          let img = og?.getAttribute('content') || '';
+          if (!img) {
+            const firstImg = doc.querySelector('article img, figure img, img');
+            if (firstImg) img = firstImg.getAttribute('src') || '';
+          }
+          if (img) {
+            it.thumbnail = img.startsWith('http') ? img : new URL(img, it.link).toString();
+          }
+        } catch {}
+      }));
+
+      return items;
     }
 
     let htmlText = null;
@@ -511,6 +551,7 @@ document.addEventListener("DOMContentLoaded", () => {
     try {
       const feedToday = await fetchPoliticoFeedItemsPaged();
       if (feedToday.length > 0) {
+        await enrichMissingImages(feedToday, 12);
         return feedToday;
       }
     } catch {}
