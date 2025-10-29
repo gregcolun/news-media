@@ -22,8 +22,8 @@ document.addEventListener("DOMContentLoaded", () => {
       "https://www.siol.net/rss"
     ],
     moldova: [
-      // Preferred sources
-      "https://jurnaltv.md/rss",
+      // Preferred sources (corrected Jurnal feed)
+      "https://www.jurnal.md/ro/rss",
       "https://tv8.md/rss",
       "https://stiri.md/rss",
       // Additional strong sources for fuller coverage
@@ -281,7 +281,9 @@ document.addEventListener("DOMContentLoaded", () => {
       return;
     }
 
-    const urls = (FEEDS[country] || []).slice(0, 5);
+    const urls = country === 'moldova'
+      ? (FEEDS[country] || []).slice(0, 12)
+      : (FEEDS[country] || []).slice(0, 5);
     
     // Clear old articles from previous days
     clearOldArticles();
@@ -376,12 +378,16 @@ document.addEventListener("DOMContentLoaded", () => {
       const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate());
       const endOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
       
+      // Slightly relax the window for sources that may timezone-shift
+      const relaxMsStart = country === 'moldova' ? 3 * 60 * 60 * 1000 : 0; // include up to 3h before midnight
+      const relaxMsEnd = country === 'moldova' ? 1 * 60 * 60 * 1000 : 0;   // include up to 1h after midnight
+
       newItems = newItems
         .filter((it) => {
           const d = new Date(it.pubDate);
           // If date is invalid or missing, assume it's today to avoid dropping fresh items from sources with nonstandard dates
           if (isNaN(d.getTime())) return true;
-          return d >= startOfDay && d < endOfDay;
+          return d >= new Date(startOfDay.getTime() - relaxMsStart) && d < new Date(endOfDay.getTime() + relaxMsEnd);
         });
 
       // Merge with existing articles
@@ -395,7 +401,8 @@ document.addEventListener("DOMContentLoaded", () => {
       
       const finalItems = allItems.filter((it) => {
         const d = new Date(it.pubDate);
-        return d >= dayStart && d < dayEnd;
+        if (isNaN(d.getTime())) return true;
+        return d >= new Date(dayStart.getTime() - relaxMsStart) && d < new Date(dayEnd.getTime() + relaxMsEnd);
       });
       
       // Save to localStorage
