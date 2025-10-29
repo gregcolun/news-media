@@ -21,6 +21,15 @@ document.addEventListener("DOMContentLoaded", () => {
       "https://www.24ur.com/rss",
       "https://www.siol.net/rss"
     ],
+    moldova: [
+      // Preferred sources
+      "https://www.jurnal.md/ro/rss",
+      "https://tv8.md/rss",
+      "https://stiri.md/rss",
+      // Keep two reliable fallbacks to maintain 5 feeds
+      "https://unimedia.info/rss/",
+      "https://www.ipn.md/en/rss"
+    ],
     bosnia: [
       "https://www.klix.ba/rss",
       "https://www.avaz.ba/rss",
@@ -219,6 +228,51 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   async function fetchFeedsFor(country, isRefresh = false) {
+    // Special handling for Politico source which is not an RSS feed
+    if (country === 'politico') {
+      // Clear old articles from previous days
+      clearOldArticles();
+      const existingArticles = getStoredArticlesForCountry(country);
+      if (existingArticles.length > 0 && !isRefresh) {
+        await renderItems(existingArticles);
+        lastUpdated.textContent = `\ud83d\udcf1 Cache: ${existingArticles.length} items`;
+      }
+
+      cards.innerHTML = '<div class="small">\u23f3 Fetching latest news...</div>';
+      const start = Date.now();
+      try {
+        const politicoItems = await fetchPoliticoLatest();
+
+        // Keep only articles from current day
+        const now = new Date();
+        const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+        const endOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
+        const todayItems = politicoItems.filter((it) => {
+          const d = new Date(it.pubDate);
+          return d >= startOfDay && d < endOfDay;
+        });
+
+        // Merge with cache
+        const allItems = mergeArticles(existingArticles, todayItems)
+          .sort((a, b) => new Date(b.pubDate) - new Date(a.pubDate));
+
+        saveArticles(country, allItems);
+        const duration = ((Date.now() - start) / 1000).toFixed(1);
+        lastUpdated.textContent = `\ud83d\udd04 ${allItems.length} items (${todayItems.length} new) • ${duration}s`;
+        await renderItems(allItems);
+      } catch (e) {
+        console.error('Error fetching Politico:', e);
+        if (existingArticles.length > 0) {
+          await renderItems(existingArticles);
+          lastUpdated.textContent = `Using cached • ${existingArticles.length} items (failed)`;
+        } else {
+          cards.innerHTML = "<p style='color:#ff6b6b'>❌ Failed to load news.</p>";
+          cards.classList.remove('has-sections');
+        }
+      }
+      return;
+    }
+
     const urls = FEEDS[country] || [];
     
     // Clear old articles from previous days
@@ -340,6 +394,266 @@ document.addEventListener("DOMContentLoaded", () => {
         cards.classList.remove('has-sections');
       }
     }
+  }
+
+  async function fetchPoliticoLatest() {
+    const url = 'https://www.politico.eu/latest/';
+    const proxies = [
+      `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(url)}`,
+      `https://corsproxy.io/?${encodeURIComponent(url)}`,
+      `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`
+    ];
+
+    let htmlText = null;
+    for (const proxy of proxies) {
+      try {
+        const res = await fetch(proxy);
+        if (res.ok) {
+          const text = await res.text();
+          if (text && text.length > 100) {
+            htmlText = text;
+            break;
+          }
+        }
+      } catch (e) {
+        console.warn('Proxy failed for Politico:', proxy);
+      }
+    }
+
+    if (!htmlText) throw new Error('No HTML from Politico');
+
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(htmlText, 'text/html');
+
+    const scope = doc.querySelector('main') || doc;
+
+    // Collect likely article links under main content
+    const titleAnchors = Array.from(scope.querySelectorAll('h2 a[href], h3 a[href], h4 a[href], a[href*="/article/"], a[href*="/news/"]'));
+
+    const seen = new Map();
+    const now = Date.now();
+
+    const results = [];
+
+    function extractRelativeDelta(container) {
+      const text = ((container && container.textContent) || '').toUpperCase();
+      if (!text) return null;
+      if (text.includes('JUST NOW')) return 0;
+      const m = text.match(/(\d+)\s*MINS?\s*AGO/);
+      const h = text.match(/(\d+)\s*HRS?\s*AGO/);
+      const hr = text.match(/(\d+)\s*HOURS?\s*AGO/);
+      const d = text.match(/(\d+)\s*DAYS?\s*AGO/);
+      let minutes = 0;
+      if (m) minutes += parseInt(m[1], 10);
+      if (h) minutes += parseInt(h[1], 10) * 60;
+      if (hr) minutes += parseInt(hr[1], 10) * 60;
+      if (d) minutes += parseInt(d[1], 10) * 1440;
+      return minutes > 0 ? minutes : (text.includes('MIN AGO') || text.includes('HR AGO') ? minutes : null);
+    }
+
+    for (const a of titleAnchors) {
+      let href = a.getAttribute('href') || '';
+      if (!href) continue;
+      if (href.startsWith('#')) continue;
+      const abs = href.startsWith('http') ? href : new URL(href, 'https://www.politico.eu').toString();
+      const u = new URL(abs);
+      if (u.hostname && !u.hostname.includes('politico.eu')) continue; // keep only Politico EU
+      // Skip pro subdomain
+      if (u.hostname.startsWith('pro.')) continue;
+      // Skip filter or utility links
+      if (/\bfilters?\b/i.test(abs)) continue;
+
+      const title = (a.textContent || '').trim();
+      if (!title || /^filters$/i.test(title)) continue; // remove stray "Filters" item
+      if (!title || title.length < 6) continue;
+
+      // Find the closest card container to also extract image/time
+      const container = a.closest('article, li, div');
+      let img = null;
+      if (container) {
+        const imgEl = container.querySelector('img');
+        if (imgEl) {
+          const src = imgEl.getAttribute('src') || imgEl.getAttribute('data-src') || null;
+          const srcset = imgEl.getAttribute('srcset') || imgEl.getAttribute('data-srcset') || '';
+          let chosen = src;
+          if (!chosen && srcset) {
+            // take first URL from srcset
+            const first = srcset.split(',')[0].trim().split(' ')[0];
+            if (first) chosen = first;
+          }
+          if (chosen) {
+            img = chosen.startsWith('http') ? chosen : new URL(chosen, 'https://www.politico.eu').toString();
+          }
+        }
+      }
+      if (!img) {
+        // Try any image sibling of the anchor
+        const sibImg = a.parentElement && a.parentElement.querySelector && a.parentElement.querySelector('img');
+        if (sibImg) {
+          const src = sibImg.getAttribute('src') || sibImg.getAttribute('data-src') || null;
+          const srcset = sibImg.getAttribute('srcset') || sibImg.getAttribute('data-srcset') || '';
+          let chosen = src;
+          if (!chosen && srcset) {
+            const first = srcset.split(',')[0].trim().split(' ')[0];
+            if (first) chosen = first;
+          }
+          if (chosen) {
+            img = chosen.startsWith('http') ? chosen : new URL(chosen, 'https://www.politico.eu').toString();
+          }
+        }
+      }
+      const thumbnail = img || FALLBACK_IMG;
+
+      // Time: prefer machine-readable time tag
+      let pubDate = null;
+      let minutesAgo = null;
+      let hoursAgo = null;
+      if (container) {
+        const timeEl = container.querySelector('time');
+        if (timeEl) {
+          const dt = timeEl.getAttribute('datetime');
+          if (dt) {
+            pubDate = dt;
+          } else {
+            const rel = (timeEl.textContent || '').toUpperCase();
+            const m = rel.match(/(\d+)\s*MINS?\s*AGO/);
+            const h = rel.match(/(\d+)\s*HRS?\s*AGO/);
+            if (m) minutesAgo = parseInt(m[1], 10);
+            if (h) hoursAgo = parseInt(h[1], 10);
+          }
+        } else {
+          const delta = extractRelativeDelta(container);
+          if (delta != null) minutesAgo = delta; // in minutes
+        }
+      }
+
+      if (minutesAgo != null || hoursAgo != null) {
+        const delta = (hoursAgo || 0) * 60 + (minutesAgo || 0);
+        pubDate = new Date(now - delta * 60 * 1000).toISOString();
+      }
+
+      // If no time was found, skip to avoid assigning identical timestamps
+      if (!pubDate) {
+        const delta = extractRelativeDelta(a.closest('li'));
+        if (delta != null) pubDate = new Date(now - delta * 60 * 1000).toISOString();
+      }
+
+      // If still missing time, we will assign later by DOM order
+
+      if (!seen.has(abs)) {
+        seen.set(abs, true);
+        results.push({ title, link: abs, pubDate, thumbnail });
+      }
+      if (results.length >= 40) break;
+    }
+
+    // If we still got nothing, fall back to broad link scan under main
+    if (!results.length) {
+      const anchors = Array.from(scope.querySelectorAll('a[href]'));
+      for (const a of anchors) {
+        const text = (a.textContent || '').trim();
+        if (text.length < 8 || /^filters$/i.test(text)) continue;
+        const href = a.getAttribute('href') || '';
+        if (!href) continue;
+        const abs = href.startsWith('http') ? href : new URL(href, 'https://www.politico.eu').toString();
+        const u = new URL(abs);
+        if (!u.hostname.includes('politico.eu')) continue;
+        if (u.hostname.startsWith('pro.')) continue;
+        // Try to find a relative time near this anchor
+        let pubDate = null;
+        const delta = extractRelativeDelta(a.closest('article, li, div'));
+        if (delta != null) pubDate = new Date(now - delta * 60 * 1000).toISOString();
+        // Allow DOM-order fallback later if missing
+        if (!seen.has(abs)) {
+          seen.set(abs, true);
+          results.push({ title: text, link: abs, pubDate, thumbnail: FALLBACK_IMG });
+        }
+        if (results.length >= 40) break;
+      }
+    }
+
+    // Helper to fetch via proxies (reused below)
+    async function fetchViaProxies(pageUrl) {
+      const proxiesLocal = [
+        `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(pageUrl)}`,
+        `https://corsproxy.io/?${encodeURIComponent(pageUrl)}`,
+        `https://api.allorigins.win/raw?url=${encodeURIComponent(pageUrl)}`
+      ];
+      for (const p of proxiesLocal) {
+        try {
+          const r = await fetch(p);
+          if (r.ok) {
+            const t = await r.text();
+            if (t && t.length > 200) return t;
+          }
+        } catch (e) {}
+      }
+      throw new Error('all proxies failed');
+    }
+
+    // Enrich items by visiting their article pages for precise datetime and og:image
+    async function enrichItem(item) {
+      try {
+        const html = await fetchViaProxies(item.link);
+        const parserLocal = new DOMParser();
+        const page = parserLocal.parseFromString(html, 'text/html');
+        // Prefer structured meta time
+        let pub = page.querySelector('meta[property="article:published_time"], meta[name="article:published_time"]')?.getAttribute('content') || null;
+        if (!pub) {
+          const timeEl = page.querySelector('time[datetime]');
+          if (timeEl) pub = timeEl.getAttribute('datetime');
+        }
+        if (!pub) {
+          const dateText = page.querySelector('.date-time__date')?.textContent?.trim() || '';
+          const timeText = page.querySelector('.date-time__time')?.textContent?.trim() || '';
+          if (dateText && timeText) pub = new Date(`${dateText} ${timeText}`).toISOString();
+        }
+        if (pub) item.pubDate = pub;
+
+        // Prefer og:image for thumbnail if missing or fallback
+        if (!item.thumbnail || item.thumbnail === FALLBACK_IMG) {
+          const og = page.querySelector('meta[property="og:image"], meta[name="og:image"]')?.getAttribute('content') || '';
+          if (og) item.thumbnail = og.startsWith('http') ? og : new URL(og, item.link).toString();
+        }
+      } catch (e) {
+        // ignore enrichment failure
+      }
+      return item;
+    }
+
+    // Assign fallback times by DOM order for any items lacking time
+    let orderIndex = 0;
+    for (const item of results) {
+      if (!item.pubDate) {
+        // assign decreasing minutes to preserve order within recent window
+        const t = new Date(now - orderIndex * 60 * 1000).toISOString();
+        item.pubDate = t;
+        orderIndex += 1;
+      }
+    }
+
+    // Enrich items in parallel (limit to first 40 for performance)
+    const slice = results.slice(0, 40);
+    await Promise.all(slice.map(enrichItem));
+
+    // Keep only current day and sort by time desc; break ties deterministically
+    const today = new Date();
+    const startOfDay = new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime();
+    const endOfDay = new Date(today.getFullYear(), today.getMonth(), today.getDate() + 1).getTime();
+    const filtered = slice.filter(it => {
+      const t = new Date(it.pubDate).getTime();
+      return !isNaN(t) && t >= startOfDay && t < endOfDay;
+    });
+
+    filtered.sort((a, b) => new Date(b.pubDate) - new Date(a.pubDate));
+    for (let i = 1; i < filtered.length; i++) {
+      if (filtered[i].pubDate === filtered[i - 1].pubDate) {
+        const t = new Date(filtered[i].pubDate).getTime() - i * 1000;
+        filtered[i].pubDate = new Date(t).toISOString();
+      }
+    }
+
+    return filtered;
   }
 
   async function renderItems(items) {
@@ -492,7 +806,9 @@ document.addEventListener("DOMContentLoaded", () => {
       .replace("🇭🇺", "")
       .replace("🇸🇮", "")
       .replace("🇭🇷", "")
-      .replace("🇧🇦", "");
+      .replace("🇧🇦", "")
+      .replace("🇲🇩", "")
+      .replace("📰", "");
     await fetchFeedsFor(countrySelect.value, false);
     // Restart auto-refresh when country changes
     startAutoRefresh();
