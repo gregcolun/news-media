@@ -139,17 +139,17 @@ document.addEventListener("DOMContentLoaded", () => {
         return pubDateString; // Return original if parsing fails
       }
       
-      // Convert to local timezone and format
-      return date.toLocaleString('en-US', {
-        year: 'numeric',
-        month: '2-digit',
-        day: '2-digit',
-        hour: '2-digit',
-        minute: '2-digit',
-        second: '2-digit',
-        hour12: true,
-        timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone
-      });
+      // Convert to local timezone and format as dd/mm/yy
+      const day = String(date.getDate()).padStart(2, '0');
+      const month = String(date.getMonth() + 1).padStart(2, '0');
+      const year = String(date.getFullYear()).slice(-2);
+      const hours = String(date.getHours()).padStart(2, '0');
+      const minutes = String(date.getMinutes()).padStart(2, '0');
+      const seconds = String(date.getSeconds()).padStart(2, '0');
+      const ampm = date.getHours() >= 12 ? 'PM' : 'AM';
+      const hour12 = date.getHours() % 12 || 12;
+      
+      return `${day}/${month}/${year} ${String(hour12).padStart(2, '0')}:${minutes}:${seconds} ${ampm}`;
     } catch (error) {
       console.warn('Date parsing failed:', error);
       return pubDateString; // Return original if conversion fails
@@ -181,42 +181,118 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   function saveArticles(country, articles) {
+    // Separate articles into today and yesterday
+    const now = new Date();
+    const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const startOfYesterday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1);
+    const endOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
+    
+    // Use a wider buffer window (36 hours) to catch articles that might be from yesterday
+    // This helps with timezone differences and RSS feeds that might have slightly off dates
+    const yesterdayWindowStart = new Date(startOfYesterday.getTime() - 36 * 60 * 60 * 1000); // 36 hours before yesterday
+    
+    const todayArticles = [];
+    const yesterdayArticles = [];
+    
+    articles.forEach(article => {
+      const d = new Date(article.pubDate);
+      if (isNaN(d.getTime())) {
+        // Invalid dates - assume they're from today
+        todayArticles.push(article);
+      } else {
+        if (d >= startOfDay && d < endOfDay) {
+          todayArticles.push(article);
+        } else if (d >= yesterdayWindowStart && d < startOfDay) {
+          // Include articles from yesterday (with wide buffer for timezone/parsing issues)
+          yesterdayArticles.push(article);
+        }
+        // Articles older than yesterday are not saved (they're filtered out)
+      }
+    });
+    
+    // Get existing articles to merge (don't overwrite, merge)
+    // This is CRITICAL: we must preserve all existing yesterday articles, even if RSS feeds don't include them
     const todayKey = getTodayKey();
-    const stored = getStoredArticles();
-    stored[country] = articles;
-    localStorage.setItem(todayKey, JSON.stringify(stored));
+    const todayStored = getStoredArticles();
+    const existingToday = todayStored[country] || [];
+    todayStored[country] = mergeArticles(existingToday, todayArticles);
+    localStorage.setItem(todayKey, JSON.stringify(todayStored));
+    
+    // Merge yesterday's articles (preserve all existing yesterday articles)
+    // This ensures that even if RSS feeds don't include yesterday articles, we keep what we have
+    const yesterdayKey = getYesterdayKey();
+    const yesterdayStored = getYesterdayStoredArticles();
+    const existingYesterday = yesterdayStored[country] || [];
+    // Always merge - never overwrite yesterday articles, as RSS feeds might not include them
+    yesterdayStored[country] = mergeArticles(existingYesterday, yesterdayArticles);
+    localStorage.setItem(yesterdayKey, JSON.stringify(yesterdayStored));
+  }
+
+  function getYesterdayKey() {
+    const yesterday = new Date();
+    yesterday.setDate(yesterday.getDate() - 1);
+    return `news_${yesterday.toDateString()}`;
+  }
+
+  function getYesterdayStoredArticles() {
+    const yesterdayKey = getYesterdayKey();
+    const stored = localStorage.getItem(yesterdayKey);
+    return stored ? JSON.parse(stored) : {};
   }
 
   function getStoredArticlesForCountry(country) {
-    const stored = getStoredArticles();
-    return stored[country] || [];
+    // Get today's articles
+    const todayStored = getStoredArticles();
+    const todayArticles = todayStored[country] || [];
+    
+    // Get yesterday's articles and merge
+    // IMPORTANT: Always include yesterday articles even if RSS feeds don't provide them today
+    const yesterdayStored = getYesterdayStoredArticles();
+    const yesterdayArticles = yesterdayStored[country] || [];
+    
+    // Debug logging (can be removed later)
+    if (yesterdayArticles.length > 0) {
+      console.log(`[${country}] Found ${yesterdayArticles.length} yesterday articles in localStorage`);
+    }
+    
+    // Merge and return, removing duplicates by link
+    const allArticles = mergeArticles(todayArticles, yesterdayArticles);
+    return allArticles;
   }
 
   function clearOldArticles() {
-    const today = new Date().toDateString();
+    const today = new Date();
+    const yesterday = new Date(today);
+    yesterday.setDate(yesterday.getDate() - 1);
+    const todayStr = today.toDateString();
+    const yesterdayStr = yesterday.toDateString();
     const keys = Object.keys(localStorage);
     keys.forEach(key => {
-      if (key.startsWith('news_') && key !== `news_${today}`) {
+      if (key.startsWith('news_') && key !== `news_${todayStr}` && key !== `news_${yesterdayStr}`) {
         localStorage.removeItem(key);
       }
     });
   }
 
-  // Function to ensure we only have current day data
+  // Function to ensure we only have past 2 days data (today + yesterday)
   function ensureCurrentDayData() {
-    const today = new Date().toDateString();
+    const today = new Date();
+    const yesterday = new Date(today);
+    yesterday.setDate(yesterday.getDate() - 1);
+    const todayStr = today.toDateString();
+    const yesterdayStr = yesterday.toDateString();
     const keys = Object.keys(localStorage);
     let cleaned = false;
     
     keys.forEach(key => {
-      if (key.startsWith('news_') && key !== `news_${today}`) {
+      if (key.startsWith('news_') && key !== `news_${todayStr}` && key !== `news_${yesterdayStr}`) {
         localStorage.removeItem(key);
         cleaned = true;
       }
     });
     
     if (cleaned) {
-      console.log('Cleaned old news data from previous days');
+      console.log('Cleaned old news data from previous days (keeping today and yesterday)');
     }
   }
 
@@ -276,13 +352,15 @@ document.addEventListener("DOMContentLoaded", () => {
         // Fast path: fetch without image enrichment, render immediately
         const politicoItems = await fetchPoliticoLatest(false);
 
-        // Keep only articles from current day
+        // Keep articles from current day + yesterday (past 2 days)
         const now = new Date();
+        const startOfYesterday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1);
         const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate());
         const endOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
         const todayItems = politicoItems.filter((it) => {
           const d = new Date(it.pubDate);
-          return d >= startOfDay && d < endOfDay;
+          // Include yesterday and today
+          return d >= startOfYesterday && d < endOfDay;
         });
 
         // Merge with cache
@@ -300,7 +378,8 @@ document.addEventListener("DOMContentLoaded", () => {
             const enriched = await fetchPoliticoLatest(true);
             const enrichedToday = enriched.filter((it) => {
               const d = new Date(it.pubDate);
-              return d >= startOfDay && d < endOfDay;
+              // Include yesterday and today
+              return d >= startOfYesterday && d < endOfDay;
             });
             const merged = mergeArticles(allItems, enrichedToday)
               .sort((a, b) => new Date(b.pubDate) - new Date(a.pubDate));
@@ -376,12 +455,17 @@ document.addEventListener("DOMContentLoaded", () => {
               it.querySelector("media\\:content, media\\:thumbnail, enclosure, thumbnail")?.getAttribute("url") ||
               (imgMatch ? imgMatch[1] : FALLBACK_IMG);
 
+            // Extract date from multiple possible fields and formats
             let dateText = (
               it.querySelector("pubDate, updated, published, dc\\:date, date")?.textContent || ""
             ).trim();
             if (!dateText) {
               const t = it.querySelector("time[datetime]")?.getAttribute("datetime") || "";
               if (t) dateText = t;
+            }
+            // Also check for other common date fields
+            if (!dateText) {
+              dateText = it.getAttribute("date") || it.getAttribute("timestamp") || "";
             }
             const pubDate = dateText || "";
 
@@ -414,8 +498,9 @@ document.addEventListener("DOMContentLoaded", () => {
 
       newItems.sort((a, b) => new Date(b.pubDate) - new Date(a.pubDate));
 
-      // Keep only articles from current day (midnight to midnight)
+      // Keep articles from current day + yesterday (past 2 days)
       const now = new Date();
+      const startOfYesterday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1);
       const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate());
       const endOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
       
@@ -423,27 +508,43 @@ document.addEventListener("DOMContentLoaded", () => {
       const relaxMsStart = country === 'moldova' ? 3 * 60 * 60 * 1000 : 0; // include up to 3h before midnight
       const relaxMsEnd = country === 'moldova' ? 1 * 60 * 60 * 1000 : 0;   // include up to 1h after midnight
 
+      // Be more lenient when filtering newItems - include articles from a wider window
+      // This helps catch articles that might be from yesterday but RSS feeds don't always include them
+      // Use a 24-hour buffer before yesterday to catch all possible yesterday articles
+      const bufferStart = new Date(startOfYesterday.getTime() - 24 * 60 * 60 * 1000); // 24 hours before yesterday midnight
+      
       newItems = newItems
         .filter((it) => {
           const d = new Date(it.pubDate);
           // If date is invalid or missing, assume it's today to avoid dropping fresh items from sources with nonstandard dates
           if (isNaN(d.getTime())) return true;
-          return d >= new Date(startOfDay.getTime() - relaxMsStart) && d < new Date(endOfDay.getTime() + relaxMsEnd);
+          // Include articles from 24 hours before yesterday to tomorrow (very wide window)
+          // This ensures we catch all yesterday articles even if date parsing has minor issues
+          return d >= bufferStart && d < new Date(endOfDay.getTime() + relaxMsEnd);
         });
 
       // Merge with existing articles
       const allItems = mergeArticles(existingArticles, newItems);
       allItems.sort((a, b) => new Date(b.pubDate) - new Date(a.pubDate));
       
-      // Filter all articles to only show current day
+      // Filter all articles to show past 2 days (yesterday + today)
+      // Be more lenient to preserve all articles from localStorage, accounting for timezone differences
       const currentTime = new Date();
+      const yesterdayStart = new Date(currentTime.getFullYear(), currentTime.getMonth(), currentTime.getDate() - 1);
       const dayStart = new Date(currentTime.getFullYear(), currentTime.getMonth(), currentTime.getDate());
       const dayEnd = new Date(currentTime.getFullYear(), currentTime.getMonth(), currentTime.getDate() + 1);
       
+      // Use a wider window (36 hours back) to capture all yesterday articles, accounting for timezone differences
+      const windowStart = new Date(yesterdayStart.getTime() - 12 * 60 * 60 * 1000); // 12 hours before yesterday midnight
+      
       const finalItems = allItems.filter((it) => {
         const d = new Date(it.pubDate);
-        if (isNaN(d.getTime())) return true;
-        return d >= new Date(dayStart.getTime() - relaxMsStart) && d < new Date(dayEnd.getTime() + relaxMsEnd);
+        if (isNaN(d.getTime())) {
+          // Invalid dates - include them (they'll be treated as today in saveArticles)
+          return true;
+        }
+        // Include articles from yesterday (with buffer) to tomorrow to ensure we catch all of yesterday
+        return d >= windowStart && d < dayEnd;
       });
       
       // Save to localStorage
@@ -475,14 +576,15 @@ document.addEventListener("DOMContentLoaded", () => {
       `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`
     ];
 
-    // 0) FAST PATH: use paginated RSS feed to collect all same-day items
+    // 0) FAST PATH: use paginated RSS feed to collect all items from past 2 days
     async function fetchPoliticoFeedItemsPaged() {
       const today = new Date();
+      const startOfYesterday = new Date(today.getFullYear(), today.getMonth(), today.getDate() - 1);
       const startOfDay = new Date(today.getFullYear(), today.getMonth(), today.getDate());
       const endOfDay = new Date(today.getFullYear(), today.getMonth(), today.getDate() + 1);
       const results = [];
       const MAX_FEED_PAGES = 4; // keep fast
-      const MAX_ITEMS = 60;
+      const MAX_ITEMS = 120; // Increased to accommodate 2 days of articles
       for (let page = 1; page <= MAX_FEED_PAGES; page++) {
         const feedUrl = page === 1 ? 'https://www.politico.eu/feed/' : `https://www.politico.eu/feed/?paged=${page}`;
         const proxiesLocal = [
@@ -518,17 +620,17 @@ document.addEventListener("DOMContentLoaded", () => {
         });
         // Stop if feed page is empty
         if (!pageItems.length) break;
-        // Partition into today vs older
+        // Partition into yesterday+today vs older
         let sawOlder = false;
         for (const it of pageItems) {
           const d = new Date(it.pubDate);
-          if (!isNaN(d.getTime()) && d >= startOfDay && d < endOfDay) {
+          if (!isNaN(d.getTime()) && d >= startOfYesterday && d < endOfDay) {
             results.push(it);
-          } else if (d < startOfDay) {
+          } else if (d < startOfYesterday) {
             sawOlder = true;
           }
         }
-        // If this feed page already contains older-than-today, subsequent pages will be older only
+        // If this feed page already contains older-than-yesterday, subsequent pages will be older only
         if (sawOlder) break;
         if (results.length >= MAX_ITEMS) break;
       }
@@ -1010,13 +1112,13 @@ document.addEventListener("DOMContentLoaded", () => {
     // Enrich all to normalize times accurately
     await Promise.all(enrichTargets.map(enrichItem));
 
-    // Keep only current day and sort by time desc; break ties deterministically
+    // Keep articles from past 2 days (yesterday + today) and sort by time desc; break ties deterministically
     const today = new Date();
-    const startOfDay = new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime();
+    const startOfYesterday = new Date(today.getFullYear(), today.getMonth(), today.getDate() - 1).getTime();
     const endOfDay = new Date(today.getFullYear(), today.getMonth(), today.getDate() + 1).getTime();
     const filtered = enrichTargets.filter(it => {
       const t = new Date(it.pubDate).getTime();
-      return !isNaN(t) && t >= startOfDay && t < endOfDay;
+      return !isNaN(t) && t >= startOfYesterday && t < endOfDay;
     });
 
     filtered.sort((a, b) => new Date(b.pubDate) - new Date(a.pubDate));
@@ -1032,38 +1134,60 @@ document.addEventListener("DOMContentLoaded", () => {
 
   async function renderItems(items) {
     if (!items.length) {
-      cards.innerHTML = "<p>No news found for today.</p>";
+      cards.innerHTML = "<p>No news found for the past 2 days.</p>";
       cards.classList.remove('has-sections');
       return;
     }
 
-    // Filter items to only show current day articles
+    // Filter items to show past 2 days (yesterday + today)
+    // Use a wider window to capture all yesterday articles, accounting for timezone differences
     const renderTime = new Date();
+    const yesterdayStart = new Date(renderTime.getFullYear(), renderTime.getMonth(), renderTime.getDate() - 1);
     const renderDayStart = new Date(renderTime.getFullYear(), renderTime.getMonth(), renderTime.getDate());
     const renderDayEnd = new Date(renderTime.getFullYear(), renderTime.getMonth(), renderTime.getDate() + 1);
     
-    const currentDayItems = items.filter(item => {
+    // Use a buffer window to ensure we catch all of yesterday (12 hours before yesterday midnight)
+    const yesterdayWindowStart = new Date(yesterdayStart.getTime() - 12 * 60 * 60 * 1000);
+    
+    const twoDayItems = items.filter(item => {
       const itemDate = new Date(item.pubDate);
-      return itemDate >= renderDayStart && itemDate < renderDayEnd;
+      if (isNaN(itemDate.getTime())) {
+        // Invalid dates - include them (they'll be shown in today)
+        return true;
+      }
+      // Include articles from yesterday (with buffer) to tomorrow
+      return itemDate >= yesterdayWindowStart && itemDate < renderDayEnd;
     });
 
-    if (!currentDayItems.length) {
-      cards.innerHTML = "<p>No news found for today.</p>";
+    if (!twoDayItems.length) {
+      cards.innerHTML = "<p>No news found for the past 2 days.</p>";
       cards.classList.remove('has-sections');
       return;
     }
 
-    // Split articles into "Latest" and "Earlier Today" based on time
+    // Split articles into "Latest", "Earlier Today", and "Yesterday"
     const threeHoursAgo = new Date(renderTime.getTime() - (3 * 60 * 60 * 1000)); // 3 hours ago
     
-    const latestItems = currentDayItems.filter(item => {
+    const latestItems = twoDayItems.filter(item => {
       const itemDate = new Date(item.pubDate);
-      return itemDate >= threeHoursAgo;
+      // Today's articles within last 3 hours
+      return itemDate >= threeHoursAgo && itemDate >= renderDayStart;
     });
     
-    const earlierItems = currentDayItems.filter(item => {
+    const earlierTodayItems = twoDayItems.filter(item => {
       const itemDate = new Date(item.pubDate);
-      return itemDate < threeHoursAgo;
+      // Today's articles older than 3 hours
+      return itemDate >= renderDayStart && itemDate < threeHoursAgo;
+    });
+    
+    const yesterdayItems = twoDayItems.filter(item => {
+      const itemDate = new Date(item.pubDate);
+      if (isNaN(itemDate.getTime())) {
+        // Invalid dates are shown in today, not yesterday
+        return false;
+      }
+      // Yesterday's articles (with buffer window to catch all of yesterday)
+      return itemDate >= yesterdayWindowStart && itemDate < renderDayStart;
     });
     
 
@@ -1110,13 +1234,26 @@ document.addEventListener("DOMContentLoaded", () => {
     }
     
     // Earlier Today section
-    if (earlierItems.length > 0) {
-      const earlierCards = await Promise.all(earlierItems.map(renderCard));
+    if (earlierTodayItems.length > 0) {
+      const earlierCards = await Promise.all(earlierTodayItems.map(renderCard));
       html += `
         <div class="section">
-          <h2 class="section-title">Earlier Today <span class="count">(${earlierItems.length})</span></h2>
+          <h2 class="section-title">Earlier Today <span class="count">(${earlierTodayItems.length})</span></h2>
           <div class="articles-grid">
             ${earlierCards.join('')}
+          </div>
+        </div>
+      `;
+    }
+    
+    // Yesterday section
+    if (yesterdayItems.length > 0) {
+      const yesterdayCards = await Promise.all(yesterdayItems.map(renderCard));
+      html += `
+        <div class="section">
+          <h2 class="section-title">Yesterday <span class="count">(${yesterdayItems.length})</span></h2>
+          <div class="articles-grid">
+            ${yesterdayCards.join('')}
           </div>
         </div>
       `;
