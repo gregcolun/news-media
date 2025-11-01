@@ -187,9 +187,8 @@ document.addEventListener("DOMContentLoaded", () => {
     const startOfYesterday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1);
     const endOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
     
-    // Use a wider buffer window (36 hours) to catch articles that might be from yesterday
-    // This helps with timezone differences and RSS feeds that might have slightly off dates
-    const yesterdayWindowStart = new Date(startOfYesterday.getTime() - 36 * 60 * 60 * 1000); // 36 hours before yesterday
+    // Use a smaller buffer window (6 hours) to catch articles from yesterday while maintaining performance
+    const yesterdayWindowStart = new Date(startOfYesterday.getTime() - 6 * 60 * 60 * 1000); // 6 hours before yesterday
     
     const todayArticles = [];
     const yesterdayArticles = [];
@@ -373,12 +372,12 @@ document.addEventListener("DOMContentLoaded", () => {
         await renderItems(allItems);
 
         // Background image enrichment to improve thumbnails without delaying UI
+        // Reduced enrichment limit for better performance
         ;(async () => {
           try {
             const enriched = await fetchPoliticoLatest(true);
             const enrichedToday = enriched.filter((it) => {
               const d = new Date(it.pubDate);
-              // Include yesterday and today
               return d >= startOfYesterday && d < endOfDay;
             });
             const merged = mergeArticles(allItems, enrichedToday)
@@ -431,7 +430,7 @@ document.addEventListener("DOMContentLoaded", () => {
           let xmlText = null;
           try {
             const controller = new AbortController();
-            const timeoutMs = country === 'moldova' ? 4000 : 7000;
+            const timeoutMs = country === 'moldova' ? 3000 : 5000; // Reduced for faster loading
             const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
             const text = await Promise.any(
               proxies.map(p => fetch(p, { signal: controller.signal }).then(r => r.ok ? r.text() : Promise.reject()))
@@ -508,18 +507,15 @@ document.addEventListener("DOMContentLoaded", () => {
       const relaxMsStart = country === 'moldova' ? 3 * 60 * 60 * 1000 : 0; // include up to 3h before midnight
       const relaxMsEnd = country === 'moldova' ? 1 * 60 * 60 * 1000 : 0;   // include up to 1h after midnight
 
-      // Be more lenient when filtering newItems - include articles from a wider window
-      // This helps catch articles that might be from yesterday but RSS feeds don't always include them
-      // Use a 24-hour buffer before yesterday to catch all possible yesterday articles
-      const bufferStart = new Date(startOfYesterday.getTime() - 24 * 60 * 60 * 1000); // 24 hours before yesterday midnight
+      // Filter articles - use a smaller buffer for performance (only 6 hours before yesterday)
+      const bufferStart = new Date(startOfYesterday.getTime() - 6 * 60 * 60 * 1000); // 6 hours before yesterday
       
       newItems = newItems
         .filter((it) => {
           const d = new Date(it.pubDate);
-          // If date is invalid or missing, assume it's today to avoid dropping fresh items from sources with nonstandard dates
+          // If date is invalid or missing, assume it's today to avoid dropping fresh items
           if (isNaN(d.getTime())) return true;
-          // Include articles from 24 hours before yesterday to tomorrow (very wide window)
-          // This ensures we catch all yesterday articles even if date parsing has minor issues
+          // Include articles from yesterday to today (with small buffer for timezone)
           return d >= bufferStart && d < new Date(endOfDay.getTime() + relaxMsEnd);
         });
 
@@ -528,14 +524,14 @@ document.addEventListener("DOMContentLoaded", () => {
       allItems.sort((a, b) => new Date(b.pubDate) - new Date(a.pubDate));
       
       // Filter all articles to show past 2 days (yesterday + today)
-      // Be more lenient to preserve all articles from localStorage, accounting for timezone differences
+      // Use a smaller buffer for better performance
       const currentTime = new Date();
       const yesterdayStart = new Date(currentTime.getFullYear(), currentTime.getMonth(), currentTime.getDate() - 1);
       const dayStart = new Date(currentTime.getFullYear(), currentTime.getMonth(), currentTime.getDate());
       const dayEnd = new Date(currentTime.getFullYear(), currentTime.getMonth(), currentTime.getDate() + 1);
       
-      // Use a wider window (36 hours back) to capture all yesterday articles, accounting for timezone differences
-      const windowStart = new Date(yesterdayStart.getTime() - 12 * 60 * 60 * 1000); // 12 hours before yesterday midnight
+      // Use a smaller buffer (6 hours) to capture yesterday articles while maintaining performance
+      const windowStart = new Date(yesterdayStart.getTime() - 6 * 60 * 60 * 1000); // 6 hours before yesterday
       
       const finalItems = allItems.filter((it) => {
         const d = new Date(it.pubDate);
@@ -543,7 +539,7 @@ document.addEventListener("DOMContentLoaded", () => {
           // Invalid dates - include them (they'll be treated as today in saveArticles)
           return true;
         }
-        // Include articles from yesterday (with buffer) to tomorrow to ensure we catch all of yesterday
+        // Include articles from yesterday (with small buffer) to tomorrow
         return d >= windowStart && d < dayEnd;
       });
       
@@ -576,15 +572,15 @@ document.addEventListener("DOMContentLoaded", () => {
       `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`
     ];
 
-    // 0) FAST PATH: use paginated RSS feed to collect all items from past 2 days
+    // 0) FAST PATH: use paginated RSS feed to collect items from past 2 days
     async function fetchPoliticoFeedItemsPaged() {
       const today = new Date();
       const startOfYesterday = new Date(today.getFullYear(), today.getMonth(), today.getDate() - 1);
       const startOfDay = new Date(today.getFullYear(), today.getMonth(), today.getDate());
       const endOfDay = new Date(today.getFullYear(), today.getMonth(), today.getDate() + 1);
       const results = [];
-      const MAX_FEED_PAGES = 4; // keep fast
-      const MAX_ITEMS = 120; // Increased to accommodate 2 days of articles
+      const MAX_FEED_PAGES = 3; // Reduced from 4 for faster loading
+      const MAX_ITEMS = 80; // Reduced from 120 for better performance
       for (let page = 1; page <= MAX_FEED_PAGES; page++) {
         const feedUrl = page === 1 ? 'https://www.politico.eu/feed/' : `https://www.politico.eu/feed/?paged=${page}`;
         const proxiesLocal = [
@@ -593,15 +589,20 @@ document.addEventListener("DOMContentLoaded", () => {
           `https://api.allorigins.win/raw?url=${encodeURIComponent(feedUrl)}`
         ];
         let xmlText = null;
-        for (const p of proxiesLocal) {
-          try {
-            const r = await fetch(p);
-            if (r.ok) {
-              const t = await r.text();
-              if (t && t.trim().startsWith('<')) { xmlText = t; break; }
-            }
-          } catch {}
-        }
+        // Use Promise.race with timeout for faster proxy selection
+        try {
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => controller.abort(), 5000); // 5 second timeout
+          const text = await Promise.race(
+            proxiesLocal.map(p => 
+              fetch(p, { signal: controller.signal })
+                .then(r => r.ok ? r.text() : Promise.reject())
+                .catch(() => Promise.reject())
+            )
+          );
+          clearTimeout(timeoutId);
+          if (text && text.trim().startsWith('<')) xmlText = text;
+        } catch {}
         if (!xmlText) break;
         const parserLocal = new DOMParser();
         const xml = parserLocal.parseFromString(xmlText, 'text/xml');
@@ -620,18 +621,27 @@ document.addEventListener("DOMContentLoaded", () => {
         });
         // Stop if feed page is empty
         if (!pageItems.length) break;
-        // Partition into yesterday+today vs older
+        // Partition into yesterday+today vs older - stop early for performance
         let sawOlder = false;
+        let foundToday = false;
         for (const it of pageItems) {
           const d = new Date(it.pubDate);
-          if (!isNaN(d.getTime()) && d >= startOfYesterday && d < endOfDay) {
-            results.push(it);
-          } else if (d < startOfYesterday) {
-            sawOlder = true;
+          if (!isNaN(d.getTime())) {
+            if (d >= startOfDay && d < endOfDay) {
+              foundToday = true;
+              results.push(it);
+            } else if (d >= startOfYesterday && d < startOfDay) {
+              results.push(it);
+            } else if (d < startOfYesterday) {
+              sawOlder = true;
+            }
           }
         }
-        // If this feed page already contains older-than-yesterday, subsequent pages will be older only
-        if (sawOlder) break;
+        // Stop early if we found today's articles but this page has older ones
+        if (foundToday && sawOlder) break;
+        // If this feed page is all older than yesterday, stop
+        if (sawOlder && !foundToday) break;
+        // Stop if we have enough items
         if (results.length >= MAX_ITEMS) break;
       }
       results.sort((a,b) => new Date(b.pubDate) - new Date(a.pubDate));
@@ -639,7 +649,7 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     // Enrich thumbnails only for items that still use fallback; keep limit small for speed
-    async function enrichMissingImages(items, maxToEnrich = 6) {
+    async function enrichMissingImages(items, maxToEnrich = 4) {
       const targets = items.filter(it => !it.thumbnail || it.thumbnail === FALLBACK_IMG).slice(0, maxToEnrich);
       if (!targets.length) return items;
 
@@ -702,7 +712,7 @@ document.addEventListener("DOMContentLoaded", () => {
       const feedToday = await fetchPoliticoFeedItemsPaged();
       if (feedToday.length > 0) {
         if (enrichImages) {
-          await enrichMissingImages(feedToday, 12);
+          await enrichMissingImages(feedToday, 6); // Reduced from 12
         }
         return feedToday;
       }
@@ -1106,8 +1116,8 @@ document.addEventListener("DOMContentLoaded", () => {
       }
     }
 
-    // Enrich items in parallel (cap to avoid overload but high enough for a full day)
-    const ENRICH_LIMIT = 120;
+    // Enrich items in parallel (reduced limit for better performance)
+    const ENRICH_LIMIT = 60;
     const enrichTargets = results.slice(0, ENRICH_LIMIT);
     // Enrich all to normalize times accurately
     await Promise.all(enrichTargets.map(enrichItem));
@@ -1146,8 +1156,8 @@ document.addEventListener("DOMContentLoaded", () => {
     const renderDayStart = new Date(renderTime.getFullYear(), renderTime.getMonth(), renderTime.getDate());
     const renderDayEnd = new Date(renderTime.getFullYear(), renderTime.getMonth(), renderTime.getDate() + 1);
     
-    // Use a buffer window to ensure we catch all of yesterday (12 hours before yesterday midnight)
-    const yesterdayWindowStart = new Date(yesterdayStart.getTime() - 12 * 60 * 60 * 1000);
+    // Use a smaller buffer window for better performance (6 hours before yesterday)
+    const yesterdayWindowStart = new Date(yesterdayStart.getTime() - 6 * 60 * 60 * 1000);
     
     const twoDayItems = items.filter(item => {
       const itemDate = new Date(item.pubDate);
