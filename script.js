@@ -235,6 +235,30 @@ document.addEventListener("DOMContentLoaded", () => {
     return Array.from(existingMap.values());
   }
 
+  // Read articles tracking functions
+  function getReadArticles() {
+    try {
+      const stored = localStorage.getItem('readArticles');
+      return stored ? new Set(JSON.parse(stored)) : new Set();
+    } catch (e) {
+      return new Set();
+    }
+  }
+
+  function markArticleAsRead(articleLink) {
+    const readArticles = getReadArticles();
+    readArticles.add(articleLink);
+    try {
+      localStorage.setItem('readArticles', JSON.stringify(Array.from(readArticles)));
+    } catch (e) {
+      console.warn('Failed to save read articles:', e);
+    }
+  }
+
+  function isArticleRead(articleLink) {
+    return getReadArticles().has(articleLink);
+  }
+
   async function fetchFeedsFor(country, isRefresh = false) {
     // Special handling for Politico source which is not an RSS feed
     if (country === 'politico') {
@@ -1049,8 +1073,11 @@ document.addEventListener("DOMContentLoaded", () => {
         displayTitle = await translateText(n.title);
       }
       
+      const isRead = isArticleRead(n.link);
+      const readClass = isRead ? ' read' : '';
+      
       return `
-        <div class="card">
+        <div class="card${readClass}" data-article-link="${n.link}">
           ${
             imagesEnabled
               ? `<img src="${n.thumbnail}" alt=""
@@ -1058,7 +1085,7 @@ document.addEventListener("DOMContentLoaded", () => {
               : ""
           }
           <div class="card-content">
-            <h3><a href="${n.link}" target="_blank" rel="noopener noreferrer">${displayTitle}</a></h3>
+            <h3><a href="${n.link}" target="_blank" rel="noopener noreferrer" data-link="${n.link}">${displayTitle}</a></h3>
             <p class="meta">${formatLocalTime(n.pubDate)} — ${
            n.link ? new URL(n.link).hostname : "Source"
          }</p>
@@ -1097,6 +1124,21 @@ document.addEventListener("DOMContentLoaded", () => {
     
     cards.innerHTML = html;
     cards.classList.add('has-sections');
+    
+    // Add click listeners to mark articles as read
+    cards.querySelectorAll('a[data-link]').forEach(link => {
+      link.addEventListener('click', (e) => {
+        const articleLink = link.getAttribute('data-link');
+        if (articleLink) {
+          markArticleAsRead(articleLink);
+          // Update the card styling immediately
+          const card = link.closest('.card');
+          if (card) {
+            card.classList.add('read');
+          }
+        }
+      });
+    });
   }
 
   refreshBtn.addEventListener("click", async () => {
